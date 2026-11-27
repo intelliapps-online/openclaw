@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/Exec: host exec (gateway, node host, macOS app) now rejects env overrides that change how code is loaded (bash exported functions, `GIT_*`, `HOME`, `SHELLOPTS`/`PS4`, `*OPT`/`*OPTIONS`, and similar), treats any non-locale `env` key on an allowlisted or safe-bin command as an allowlist miss that needs approval, and shows the requested env in exec approval prompts with the approval bound to that exact env.
 - Gateway/Hooks: run BOOT.md startup checks per configured agent scope, including per-agent session-key resolution, startup-hook regression coverage, and non-success boot outcome logging for diagnosability. (#20569) thanks @mcaxtr.
 - Telegram: unify message-like inbound handling so `message` and `channel_post` share the same dedupe/access/media pipeline and remain behaviorally consistent. (#20591) Thanks @obviyus.
 - Heartbeat/Cron: skip interval heartbeats when `HEARTBEAT.md` is missing or empty and no tagged cron events are queued, while preserving cron-event fallback for queued tagged reminders. (#20461) thanks @vikpos.

@@ -36,8 +36,13 @@ Notes:
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
 - On non-Windows hosts, exec uses `SHELL` when set; if `SHELL` is `fish`, it prefers `bash` (or `sh`)
   from `PATH` to avoid fish-incompatible scripts, then falls back to `SHELL` if neither exists.
-- Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
-  prevent binary hijacking or injected code.
+- Host execution (`gateway`/`node`) rejects `env.PATH` and keys that change how code is loaded
+  (for example `LD_*`/`DYLD_*`, `BASH_FUNC_*`, `GIT_*`, `HOME`, `SHELLOPTS`/`PS4`, `NODE_OPTIONS`,
+  `PERL5OPT`/`RUBYOPT`) to prevent binary hijacking or injected code, even after approval.
+- With `security=allowlist`, only display/locale env keys (`LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`,
+  `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, `COLUMNS`, `LINES`) may
+  accompany an allowlisted or safe-bin command. Any other `env` key counts as an allowlist miss, so
+  the run needs an approval; the approval prompt shows the requested env and is bound to it.
 - Important: sandboxing is **off by default**. If sandboxing is off, `host=sandbox` runs directly on
   the gateway host (no container) and **does not require approvals**. To require approvals, run with
   `host=gateway` and configure exec approvals (or enable sandboxing).
