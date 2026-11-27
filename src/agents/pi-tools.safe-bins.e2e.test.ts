@@ -146,15 +146,24 @@ describe("createOpenClawCodingTools safeBins", () => {
     const execTool = tools.find((tool) => tool.name === "exec");
     expect(execTool).toBeDefined();
 
+    // LANG is one of the env keys that may accompany an allowlisted command without approval.
     const result = await execTool!.execute("call1", {
-      command: "head $FOO ; wc -l",
+      command: "head $LANG ; wc -l",
       workdir: tmpDir,
-      env: { FOO: "secret.txt" },
+      env: { LANG: "secret.txt" },
     });
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
     const blockedResultDetails = result.details as { status?: string };
     expect(blockedResultDetails.status).toBe("completed");
     expect(text).not.toContain(secret);
+
+    await expect(
+      execTool!.execute("call2", {
+        command: "head $FOO ; wc -l",
+        workdir: tmpDir,
+        env: { FOO: "secret.txt" },
+      }),
+    ).rejects.toThrow(/env overrides require approval/);
   });
 });

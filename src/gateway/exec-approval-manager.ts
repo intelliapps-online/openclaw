@@ -13,6 +13,8 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  /** Request-scoped env overrides the command will run with (shown to approvers, bound on run). */
+  env?: Record<string, string> | null;
 };
 
 export type ExecApprovalRecord = {

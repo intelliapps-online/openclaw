@@ -471,6 +471,7 @@ export function createNodesTool(options?: {
                 host: "node",
                 agentId,
                 sessionKey,
+                env,
                 timeoutMs: APPROVAL_TIMEOUT_MS,
               },
             );

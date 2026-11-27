@@ -19,6 +19,10 @@ import {
   buildSafeShellCommand,
   buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
+import {
+  filterHostEnvOverrides,
+  hostEnvOverridesRequireApproval,
+} from "../infra/host-env-security.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   getShellPathFromLoginShell,
@@ -48,7 +52,7 @@ import {
   runExecProcess,
   execSchema,
   type ExecProcessHandle,
-  validateHostEnv,
+  describeHostEnvViolation,
 } from "./bash-tools.exec-runtime.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import {
@@ -387,13 +391,19 @@ export function createExecTool(
 
       const baseEnv = coerceEnv(process.env);
 
-      // Logic: Sandbox gets raw env. Host (gateway/node) must pass validation.
-      // We validate BEFORE merging to prevent any dangerous vars from entering the stream.
-      if (host !== "sandbox" && params.env) {
-        validateHostEnv(params.env);
-      }
+      // Logic: Sandbox gets raw env. Host (gateway/node) never merges blocked keys, and any run
+      // that requested them is refused before it executes (after approval, if one is asked for).
+      const hostEnvViolation =
+        host !== "sandbox" && params.env ? describeHostEnvViolation(params.env) : null;
+      // Allowlist/safe-bin checks only inspect the command text, so anything beyond the
+      // display/locale keys must go through an approval that shows the env.
+      const envRequiresApproval =
+        host !== "sandbox" && hostEnvOverridesRequireApproval(params.env ?? null);
+      const approvalEnv =
+        params.env && Object.keys(params.env).length > 0 ? { ...params.env } : undefined;
+      const envOverrides = host === "sandbox" ? params.env : filterHostEnvOverrides(params.env);
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      const mergedEnv = envOverrides ? { ...baseEnv, ...envOverrides } : baseEnv;
 
       const env = sandbox
         ? buildSandboxEnv({
@@ -465,7 +475,7 @@ export function createExecTool(
         }
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
 
-        const nodeEnv = params.env ? { ...params.env } : undefined;
+        const nodeEnv = envOverrides ? { ...envOverrides } : undefined;
         const baseAllowlistEval = evaluateShellAllowlist({
           command: params.command,
           allowlist: [],
@@ -502,7 +512,7 @@ export function createExecTool(
                 env,
                 platform: nodeInfo?.platform,
               });
-              allowlistSatisfied = allowlistEval.allowlistSatisfied;
+              allowlistSatisfied = allowlistEval.allowlistSatisfied && !envRequiresApproval;
               analysisOk = allowlistEval.analysisOk;
             }
           } catch {
@@ -567,6 +577,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath: undefined,
                   sessionKey: defaults?.sessionKey,
+                  env: approvalEnv,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
@@ -604,6 +615,9 @@ export function createExecTool(
             } else if (decision === "allow-always") {
               approvedByAsk = true;
               approvalDecision = "allow-always";
+            }
+            if (!deniedReason && hostEnvViolation) {
+              deniedReason = "blocked-env";
             }
 
             if (deniedReason) {
@@ -664,6 +678,9 @@ export function createExecTool(
           };
         }
 
+        if (hostEnvViolation) {
+          throw new Error(hostEnvViolation);
+        }
         const startedAt = Date.now();
         const raw = await callGatewayTool(
           "node.invoke",
@@ -715,7 +732,9 @@ export function createExecTool(
         const allowlistMatches = allowlistEval.allowlistMatches;
         const analysisOk = allowlistEval.analysisOk;
         const allowlistSatisfied =
-          hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+          hostSecurity === "allowlist" && analysisOk && !envRequiresApproval
+            ? allowlistEval.allowlistSatisfied
+            : false;
         const requiresAsk = requiresExecApproval({
           ask: hostAsk,
           security: hostSecurity,
@@ -751,6 +770,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath,
                   sessionKey: defaults?.sessionKey,
+                  env: approvalEnv,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
@@ -788,7 +808,7 @@ export function createExecTool(
               approvedByAsk = true;
             } else if (decision === "allow-always") {
               approvedByAsk = true;
-              if (hostSecurity === "allowlist") {
+              if (hostSecurity === "allowlist" && !hostEnvViolation) {
                 for (const segment of allowlistEval.segments) {
                   const pattern = segment.resolution?.resolvedPath ?? "";
                   if (pattern) {
@@ -804,6 +824,9 @@ export function createExecTool(
               !approvedByAsk
             ) {
               deniedReason = deniedReason ?? "allowlist-miss";
+            }
+            if (!deniedReason && hostEnvViolation) {
+              deniedReason = "blocked-env";
             }
 
             if (deniedReason) {
@@ -904,8 +927,15 @@ export function createExecTool(
           };
         }
 
+        if (hostEnvViolation) {
+          throw new Error(hostEnvViolation);
+        }
         if (hostSecurity === "allowlist" && (!analysisOk || !allowlistSatisfied)) {
-          throw new Error("exec denied: allowlist miss");
+          throw new Error(
+            envRequiresApproval
+              ? "exec denied: env overrides require approval"
+              : "exec denied: allowlist miss",
+          );
         }
 
         // If allowlist uses safeBins, sanitize only those stdin-only segments:
@@ -961,6 +991,10 @@ export function createExecTool(
             );
           }
         }
+      }
+
+      if (hostEnvViolation) {
+        throw new Error(hostEnvViolation);
       }
 
       const effectiveTimeout =
