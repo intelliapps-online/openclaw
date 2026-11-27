@@ -12,7 +12,6 @@ export type MattermostEventPayload = {
     channel_name?: string;
     channel_display_name?: string;
     channel_type?: string;
-    sender_name?: string;
     team_id?: string;
   };
   broadcast?: {
