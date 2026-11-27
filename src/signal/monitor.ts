@@ -111,6 +111,18 @@ function shouldEmitSignalReactionNotification(params: {
   return true;
 }
 
+// Control chars, line/paragraph separators, and bidi overrides; ZWJ stays for emoji sequences.
+const SIGNAL_LABEL_UNSAFE_RE = /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069]+/gu;
+
+function sanitizeSignalReactionLabel(value: string | undefined, maxChars: number): string {
+  if (!value) {
+    return "";
+  }
+  const collapsed = value.replace(SIGNAL_LABEL_UNSAFE_RE, " ").replace(/\s+/g, " ").trim();
+  const chars = Array.from(collapsed);
+  return chars.length > maxChars ? `${chars.slice(0, maxChars - 1).join("")}…` : collapsed;
+}
+
 function buildSignalReactionSystemEventText(params: {
   emojiLabel: string;
   actorLabel: string;
@@ -118,9 +130,15 @@ function buildSignalReactionSystemEventText(params: {
   targetLabel?: string;
   groupLabel?: string;
 }) {
-  const base = `Signal reaction added: ${params.emojiLabel} by ${params.actorLabel} msg ${params.messageId}`;
-  const withTarget = params.targetLabel ? `${base} from ${params.targetLabel}` : base;
-  return params.groupLabel ? `${withTarget} in ${params.groupLabel}` : withTarget;
+  // Reaction labels come from sender-controlled profile and payload fields.
+  const emojiLabel = sanitizeSignalReactionLabel(params.emojiLabel, 32) || "emoji";
+  const actorLabel = sanitizeSignalReactionLabel(params.actorLabel, 64) || "unknown";
+  const messageId = sanitizeSignalReactionLabel(params.messageId, 32) || "unknown";
+  const targetLabel = sanitizeSignalReactionLabel(params.targetLabel, 80);
+  const groupLabel = sanitizeSignalReactionLabel(params.groupLabel, 120);
+  const base = `Signal reaction added: ${emojiLabel} by ${actorLabel} msg ${messageId}`;
+  const withTarget = targetLabel ? `${base} from ${targetLabel}` : base;
+  return groupLabel ? `${withTarget} in ${groupLabel}` : withTarget;
 }
 
 async function waitForSignalDaemonReady(params: {
