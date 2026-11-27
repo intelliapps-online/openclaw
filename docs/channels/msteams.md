@@ -87,12 +87,12 @@ Disable with:
 **DM access**
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
-- `channels.msteams.allowFrom` accepts AAD object IDs, UPNs, or display names. The wizard resolves names to IDs via Microsoft Graph when credentials allow.
+- `channels.msteams.allowFrom` matches senders by AAD object ID only. You can enter UPNs or display names; the wizard and gateway startup resolve them to object IDs via Microsoft Graph when credentials allow. Entries that cannot be resolved, or display names that match more than one user, never match a sender. Prefer object IDs or UPNs.
 
 **Group access**
 
 - Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Use `channels.defaults.groupPolicy` to override the default when unset.
-- `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- `channels.msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Same matching rules as `allowFrom`: object IDs only at runtime.
 - Set `groupPolicy: "open"` to allow any member (still mention‑gated by default).
 - To allow **no channels**, set `channels.msteams.groupPolicy: "disabled"`.
 
@@ -454,7 +454,7 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
-- `channels.msteams.allowFrom`: allowlist for DMs (AAD object IDs, UPNs, or display names). The wizard resolves names to IDs during setup when Graph access is available.
+- `channels.msteams.allowFrom`: allowlist for DMs. Senders match by AAD object ID only; UPNs and display names are resolved to object IDs at setup/startup when Graph access is available (ambiguous or unresolved names never match).
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
 - `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
@@ -464,11 +464,11 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.teams.<teamId>.replyStyle`: per-team override.
 - `channels.msteams.teams.<teamId>.requireMention`: per-team override.
 - `channels.msteams.teams.<teamId>.tools`: default per-team tool policy overrides (`allow`/`deny`/`alsoAllow`) used when a channel override is missing.
-- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides (`"*"` wildcard supported).
+- `channels.msteams.teams.<teamId>.toolsBySender`: default per-team per-sender tool policy overrides, keyed by AAD object ID (`"*"` wildcard supported; display names are not matched).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
-- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
+- `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides, keyed by AAD object ID (`"*"` wildcard supported; display names are not matched).
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
 ## Routing & Sessions

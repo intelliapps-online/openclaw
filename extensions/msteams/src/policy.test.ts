@@ -146,7 +146,6 @@ describe("msteams policy", () => {
           groupPolicy: "open",
           allowFrom: [],
           senderId: "user-id",
-          senderName: "User",
         }),
       ).toBe(true);
     });
@@ -157,7 +156,6 @@ describe("msteams policy", () => {
           groupPolicy: "disabled",
           allowFrom: ["user-id"],
           senderId: "user-id",
-          senderName: "User",
         }),
       ).toBe(false);
     });
@@ -168,7 +166,6 @@ describe("msteams policy", () => {
           groupPolicy: "allowlist",
           allowFrom: [],
           senderId: "user-id",
-          senderName: "User",
         }),
       ).toBe(false);
     });
@@ -179,20 +176,18 @@ describe("msteams policy", () => {
           groupPolicy: "allowlist",
           allowFrom: ["User-Id"],
           senderId: "user-id",
-          senderName: "User",
         }),
       ).toBe(true);
     });
 
-    it("allows allowlist when sender name matches", () => {
+    it("does not allow allowlist when only the sender display name matches", () => {
       expect(
         isMSTeamsGroupAllowed({
           groupPolicy: "allowlist",
           allowFrom: ["user"],
           senderId: "other",
-          senderName: "User",
         }),
-      ).toBe(true);
+      ).toBe(false);
     });
 
     it("allows allowlist wildcard", () => {
@@ -201,7 +196,6 @@ describe("msteams policy", () => {
           groupPolicy: "allowlist",
           allowFrom: ["*"],
           senderId: "other",
-          senderName: "User",
         }),
       ).toBe(true);
     });

@@ -182,25 +182,35 @@ export async function resolveMSTeamsUserAllowlist(params: {
       results.push({ input, resolved: true, id: query });
       continue;
     }
-    let users: GraphUser[] = [];
-    if (query.includes("@")) {
-      const escaped = escapeOData(query);
-      const filter = `(mail eq '${escaped}' or userPrincipalName eq '${escaped}')`;
-      const path = `/users?$filter=${encodeURIComponent(filter)}&$select=id,displayName,mail,userPrincipalName`;
-      const res = await fetchGraphJson<GraphResponse<GraphUser>>({ token, path });
-      users = res.value ?? [];
-    } else {
-      const path = `/users?$search=${encodeURIComponent(`"displayName:${query}"`)}&$select=id,displayName,mail,userPrincipalName&$top=10`;
-      const res = await fetchGraphJson<GraphResponse<GraphUser>>({
-        token,
-        path,
-        headers: { ConsistencyLevel: "eventual" },
-      });
-      users = res.value ?? [];
-    }
+    const escaped = escapeOData(query);
+    const isUpnOrMail = query.includes("@");
+    const filter = isUpnOrMail
+      ? `(mail eq '${escaped}' or userPrincipalName eq '${escaped}')`
+      : `displayName eq '${escaped}'`;
+    const path = `/users?$filter=${encodeURIComponent(filter)}&$select=id,displayName,mail,userPrincipalName&$top=2`;
+    const res = await fetchGraphJson<GraphResponse<GraphUser>>({ token, path });
+    const lowered = query.toLowerCase();
+    const candidates = res.value ?? [];
+    const users = candidates.filter((user) => {
+      if (!user.id) {
+        return false;
+      }
+      if (isUpnOrMail) {
+        return (
+          user.mail?.toLowerCase() === lowered || user.userPrincipalName?.toLowerCase() === lowered
+        );
+      }
+      return user.displayName?.trim().toLowerCase() === lowered;
+    });
+    // These ids become allowlist entries, so an ambiguous name (e.g. a second
+    // user or guest with the same display name) must stay unresolved.
     const match = users[0];
-    if (!match?.id) {
-      results.push({ input, resolved: false });
+    if (candidates.length > 1 || users.length !== 1 || !match?.id) {
+      results.push({
+        input,
+        resolved: false,
+        note: candidates.length > 1 ? "multiple matches; use the user object id or UPN" : undefined,
+      });
       continue;
     }
     results.push({
@@ -208,7 +218,6 @@ export async function resolveMSTeamsUserAllowlist(params: {
       resolved: true,
       id: match.id,
       name: match.displayName ?? undefined,
-      note: users.length > 1 ? "multiple matches; chose first" : undefined,
     });
   }
 

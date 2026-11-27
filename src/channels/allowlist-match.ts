@@ -22,11 +22,14 @@ export function formatAllowlistMatchMeta(
   return `matchKey=${match?.matchKey ?? "none"} matchSource=${match?.matchSource ?? "none"}`;
 }
 
+/**
+ * Matches only the sender's stable id (or a wildcard). Display names are not
+ * unique and are often user-controlled, so they must never authorize a sender.
+ */
 export function resolveAllowlistMatchSimple(params: {
   allowFrom: Array<string | number>;
   senderId: string;
-  senderName?: string | null;
-}): AllowlistMatch<"wildcard" | "id" | "name"> {
+}): AllowlistMatch<"wildcard" | "id"> {
   const allowFrom = params.allowFrom
     .map((entry) => String(entry).trim().toLowerCase())
     .filter(Boolean);
@@ -41,11 +44,6 @@ export function resolveAllowlistMatchSimple(params: {
   const senderId = params.senderId.toLowerCase();
   if (allowFrom.includes(senderId)) {
     return { allowed: true, matchKey: senderId, matchSource: "id" };
-  }
-
-  const senderName = params.senderName?.toLowerCase();
-  if (senderName && allowFrom.includes(senderName)) {
-    return { allowed: true, matchKey: senderName, matchSource: "name" };
   }
 
   return { allowed: false };

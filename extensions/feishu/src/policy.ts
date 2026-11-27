@@ -6,14 +6,14 @@ import type {
 import { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk";
 import type { FeishuConfig, FeishuGroupConfig } from "./types.js";
 
-export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
 
+// Matches open_id/chat id only; display names are not unique and must not authorize.
 export function resolveFeishuAllowlistMatch(params: {
   allowFrom: Array<string | number>;
   senderId: string;
-  senderName?: string | null;
 }): FeishuAllowlistMatch {
-  return resolveAllowlistMatchSimple(params);
+  return resolveAllowlistMatchSimple({ allowFrom: params.allowFrom, senderId: params.senderId });
 }
 
 export function resolveFeishuGroupConfig(params: {
@@ -56,7 +56,6 @@ export function isFeishuGroupAllowed(params: {
   groupPolicy: "open" | "allowlist" | "disabled";
   allowFrom: Array<string | number>;
   senderId: string;
-  senderName?: string | null;
 }): boolean {
   const { groupPolicy } = params;
   if (groupPolicy === "disabled") {
