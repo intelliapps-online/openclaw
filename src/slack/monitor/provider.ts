@@ -5,8 +5,8 @@ import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../auto-reply/reply/history.js";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
-  mergeAllowlist,
   patchAllowlistUsersInConfigEntries,
+  replaceResolvedAllowlistEntries,
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
@@ -284,7 +284,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             token: resolveToken,
             entries: allowEntries.map((entry) => String(entry)),
           });
-          const { mapping, unresolved, additions } = buildAllowlistResolutionSummary(
+          const { resolvedMap, mapping, unresolved } = buildAllowlistResolutionSummary(
             resolvedUsers,
             {
               formatResolved: (entry) => {
@@ -295,7 +295,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               },
             },
           );
-          allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+          // Runtime checks match user ids only, so resolved names are swapped for their ids.
+          allowFrom = replaceResolvedAllowlistEntries({ existing: allowFrom, resolvedMap });
           ctx.allowFrom = normalizeAllowList(allowFrom);
           summarizeMapping("slack users", mapping, unresolved, runtime);
         } catch (err) {
@@ -321,6 +322,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             const nextChannels = patchAllowlistUsersInConfigEntries({
               entries: channelsConfig,
               resolvedMap,
+              mode: "replace",
             });
             channelsConfig = nextChannels;
             ctx.channelsConfig = nextChannels;

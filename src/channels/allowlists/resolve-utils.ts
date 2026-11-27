@@ -71,10 +71,28 @@ export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLik
   return additions;
 }
 
+/** Swaps each resolved entry for its id; unresolved entries are kept unchanged. */
+export function replaceResolvedAllowlistEntries<T extends AllowlistUserResolutionLike>(params: {
+  existing?: Array<string | number>;
+  resolvedMap: Map<string, T>;
+}): string[] {
+  const replaced = (params.existing ?? []).map((entry) => {
+    const trimmed = String(entry).trim();
+    const resolved = params.resolvedMap.get(trimmed);
+    return resolved?.resolved && resolved.id ? resolved.id : trimmed;
+  });
+  return mergeAllowlist({ additions: replaced });
+}
+
 export function patchAllowlistUsersInConfigEntries<
   T extends AllowlistUserResolutionLike,
   TEntries extends Record<string, unknown>,
->(params: { entries: TEntries; resolvedMap: Map<string, T> }): TEntries {
+>(params: {
+  entries: TEntries;
+  resolvedMap: Map<string, T>;
+  /** "replace" drops resolved name entries in favor of their ids; "merge" keeps both. */
+  mode?: "merge" | "replace";
+}): TEntries {
   const nextEntries: Record<string, unknown> = { ...params.entries };
   for (const [entryKey, entryConfig] of Object.entries(params.entries)) {
     if (!entryConfig || typeof entryConfig !== "object") {
@@ -82,6 +100,16 @@ export function patchAllowlistUsersInConfigEntries<
     }
     const users = (entryConfig as { users?: Array<string | number> }).users;
     if (!Array.isArray(users) || users.length === 0) {
+      continue;
+    }
+    if (params.mode === "replace") {
+      nextEntries[entryKey] = {
+        ...entryConfig,
+        users: replaceResolvedAllowlistEntries({
+          existing: users,
+          resolvedMap: params.resolvedMap,
+        }),
+      };
       continue;
     }
     const additions = resolveAllowlistIdAdditions({

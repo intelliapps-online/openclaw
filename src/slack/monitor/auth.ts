@@ -9,18 +9,13 @@ export async function resolveSlackEffectiveAllowFrom(ctx: SlackMonitorContext) {
   return { allowFrom, allowFromLower };
 }
 
-export function isSlackSenderAllowListed(params: {
-  allowListLower: string[];
-  senderId: string;
-  senderName?: string;
-}) {
-  const { allowListLower, senderId, senderName } = params;
+export function isSlackSenderAllowListed(params: { allowListLower: string[]; senderId: string }) {
+  const { allowListLower, senderId } = params;
   return (
     allowListLower.length === 0 ||
     allowListMatches({
       allowList: allowListLower,
       id: senderId,
-      name: senderName,
     })
   );
 }

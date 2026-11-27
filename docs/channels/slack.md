@@ -171,6 +171,8 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
     - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
     - unresolved entries are kept as configured
+    - user allowlists (`allowFrom`, `channels.*.users`) only match Slack user IDs at runtime; display names and usernames are never compared against the sender
+    - user names, `@handles`, and emails are resolved to user IDs once at startup; a name shared by several members is left unresolved and matches nobody, so prefer user IDs (for example `U012ABCDEF`)
 
   </Tab>
 

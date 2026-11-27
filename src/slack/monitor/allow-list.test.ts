@@ -15,42 +15,34 @@ describe("slack/allow-list", () => {
     expect(normalizeSlackSlug(" #Ops.Room ")).toBe("#ops.room");
   });
 
-  it("matches wildcard, id, and prefixed name candidates", () => {
-    expect(resolveSlackAllowListMatch({ allowList: ["*"], id: "u1", name: "alice" })).toEqual({
+  it("matches wildcard, id, and prefixed id candidates", () => {
+    expect(resolveSlackAllowListMatch({ allowList: ["*"], id: "u1" })).toEqual({
       allowed: true,
       matchKey: "*",
       matchSource: "wildcard",
     });
 
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["u1"],
-        id: "u1",
-        name: "alice",
-      }),
-    ).toEqual({
+    expect(resolveSlackAllowListMatch({ allowList: ["u1"], id: "U1" })).toEqual({
       allowed: true,
       matchKey: "u1",
       matchSource: "id",
     });
 
-    expect(
-      resolveSlackAllowListMatch({
-        allowList: ["slack:alice"],
-        id: "u2",
-        name: "alice",
-      }),
-    ).toEqual({
+    expect(resolveSlackAllowListMatch({ allowList: ["slack:u1"], id: "U1" })).toEqual({
       allowed: true,
-      matchKey: "slack:alice",
-      matchSource: "prefixed-name",
+      matchKey: "slack:u1",
+      matchSource: "prefixed-id",
     });
   });
 
+  it("ignores name entries that do not equal the sender id", () => {
+    expect(
+      resolveSlackAllowListMatch({ allowList: ["alice", "slack:alice", "alice-smith"], id: "u2" }),
+    ).toEqual({ allowed: false });
+  });
+
   it("allows all users when allowList is empty and denies unknown entries", () => {
-    expect(resolveSlackUserAllowed({ allowList: [], userId: "u1", userName: "alice" })).toBe(true);
-    expect(resolveSlackUserAllowed({ allowList: ["u2"], userId: "u1", userName: "alice" })).toBe(
-      false,
-    );
+    expect(resolveSlackUserAllowed({ allowList: [], userId: "u1" })).toBe(true);
+    expect(resolveSlackUserAllowed({ allowList: ["u2"], userId: "u1" })).toBe(false);
   });
 });

@@ -18,13 +18,17 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
 }
 
 export type SlackAllowListMatch = AllowlistMatch<
-  "wildcard" | "id" | "prefixed-id" | "prefixed-user" | "name" | "prefixed-name" | "slug"
+  "wildcard" | "id" | "prefixed-id" | "prefixed-user"
 >;
 
+/**
+ * Slack display names, full names, and usernames are editable by every member and are not
+ * unique, so user allowlists only match on the sender's user id. Name entries in config are
+ * resolved to ids once at startup (see provider.ts).
+ */
 export function resolveSlackAllowListMatch(params: {
   allowList: string[];
   id?: string;
-  name?: string;
 }): SlackAllowListMatch {
   const allowList = params.allowList;
   if (allowList.length === 0) {
@@ -33,16 +37,11 @@ export function resolveSlackAllowListMatch(params: {
   if (allowList.includes("*")) {
     return { allowed: true, matchKey: "*", matchSource: "wildcard" };
   }
-  const id = params.id?.toLowerCase();
-  const name = params.name?.toLowerCase();
-  const slug = normalizeSlackSlug(name);
+  const id = params.id?.trim().toLowerCase();
   const candidates: Array<{ value?: string; source: SlackAllowListMatch["matchSource"] }> = [
     { value: id, source: "id" },
     { value: id ? `slack:${id}` : undefined, source: "prefixed-id" },
     { value: id ? `user:${id}` : undefined, source: "prefixed-user" },
-    { value: name, source: "name" },
-    { value: name ? `slack:${name}` : undefined, source: "prefixed-name" },
-    { value: slug, source: "slug" },
   ];
   for (const candidate of candidates) {
     if (!candidate.value) {
@@ -59,14 +58,13 @@ export function resolveSlackAllowListMatch(params: {
   return { allowed: false };
 }
 
-export function allowListMatches(params: { allowList: string[]; id?: string; name?: string }) {
+export function allowListMatches(params: { allowList: string[]; id?: string }) {
   return resolveSlackAllowListMatch(params).allowed;
 }
 
 export function resolveSlackUserAllowed(params: {
   allowList?: Array<string | number>;
   userId?: string;
-  userName?: string;
 }) {
   const allowList = normalizeAllowListLower(params.allowList);
   if (allowList.length === 0) {
@@ -75,6 +73,5 @@ export function resolveSlackUserAllowed(params: {
   return allowListMatches({
     allowList,
     id: params.userId,
-    name: params.userName,
   });
 }

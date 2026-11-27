@@ -243,7 +243,6 @@ export async function prepareSlackMessage(params: {
     ? resolveSlackUserAllowed({
         allowList: channelConfig?.users,
         userId: senderId,
-        userName: senderName,
       })
     : true;
   if (isRoom && !channelUserAuthorized) {
@@ -262,7 +261,6 @@ export async function prepareSlackMessage(params: {
   const ownerAuthorized = resolveSlackAllowListMatch({
     allowList: allowFromLower,
     id: senderId,
-    name: senderName,
   }).allowed;
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
@@ -271,7 +269,6 @@ export async function prepareSlackMessage(params: {
       ? resolveSlackUserAllowed({
           allowList: channelConfig?.users,
           userId: senderId,
-          userName: senderName,
         })
       : false;
   const commandGate = resolveControlCommandGate({
