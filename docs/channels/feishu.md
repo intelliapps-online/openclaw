@@ -442,6 +442,27 @@ openclaw pairing list feishu
 }
 ```
 
+### Webhook mode
+
+WebSocket (long connection) is the default and does not need a public URL. If you set `connectionMode: "webhook"`, OpenClaw runs an HTTP server for Feishu event callbacks instead:
+
+- `encryptKey` is required. Copy the **Encrypt Key** from **Event Subscription** in the Feishu console. OpenClaw refuses to start webhook mode without it and rejects any request whose `X-Lark-Signature` does not match.
+- The server binds to `127.0.0.1` by default. Put a reverse proxy in front of it, or set `webhookHost` (for example `0.0.0.0`) to listen on other interfaces.
+
+```json5
+{
+  channels: {
+    feishu: {
+      connectionMode: "webhook",
+      encryptKey: "<encrypt-key>",
+      webhookHost: "127.0.0.1", // default
+      webhookPort: 3000, // default
+      webhookPath: "/feishu/events", // default
+    },
+  },
+}
+```
+
 ### Message limits
 
 - `textChunkLimit`: outbound text chunk size (default: 2000 chars)
@@ -527,23 +548,28 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 
 Key options:
 
-| Setting                                           | Description                     | Default   |
-| ------------------------------------------------- | ------------------------------- | --------- |
-| `channels.feishu.enabled`                         | Enable/disable channel          | `true`    |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`) | `feishu`  |
-| `channels.feishu.accounts.<id>.appId`             | App ID                          | -         |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                      | -         |
-| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override | `feishu`  |
-| `channels.feishu.dmPolicy`                        | DM policy                       | `pairing` |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)     | -         |
-| `channels.feishu.groupPolicy`                     | Group policy                    | `open`    |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                 | -         |
-| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                | `true`    |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                    | `true`    |
-| `channels.feishu.textChunkLimit`                  | Message chunk size              | `2000`    |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                | `30`      |
-| `channels.feishu.streaming`                       | Enable streaming card output    | `true`    |
-| `channels.feishu.blockStreaming`                  | Enable block streaming          | `true`    |
+| Setting                                           | Description                                   | Default          |
+| ------------------------------------------------- | --------------------------------------------- | ---------------- |
+| `channels.feishu.enabled`                         | Enable/disable channel                        | `true`           |
+| `channels.feishu.domain`                          | API domain (`feishu` or `lark`)               | `feishu`         |
+| `channels.feishu.accounts.<id>.appId`             | App ID                                        | -                |
+| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                    | -                |
+| `channels.feishu.accounts.<id>.domain`            | Per-account API domain override               | `feishu`         |
+| `channels.feishu.connectionMode`                  | `websocket` or `webhook`                      | `websocket`      |
+| `channels.feishu.encryptKey`                      | Event Encrypt Key (required for webhook mode) | -                |
+| `channels.feishu.webhookHost`                     | Webhook listen address                        | `127.0.0.1`      |
+| `channels.feishu.webhookPort`                     | Webhook listen port                           | `3000`           |
+| `channels.feishu.webhookPath`                     | Webhook request path                          | `/feishu/events` |
+| `channels.feishu.dmPolicy`                        | DM policy                                     | `pairing`        |
+| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                   | -                |
+| `channels.feishu.groupPolicy`                     | Group policy                                  | `open`           |
+| `channels.feishu.groupAllowFrom`                  | Group allowlist                               | -                |
+| `channels.feishu.groups.<chat_id>.requireMention` | Require @mention                              | `true`           |
+| `channels.feishu.groups.<chat_id>.enabled`        | Enable group                                  | `true`           |
+| `channels.feishu.textChunkLimit`                  | Message chunk size                            | `2000`           |
+| `channels.feishu.mediaMaxMb`                      | Media size limit                              | `30`             |
+| `channels.feishu.streaming`                       | Enable streaming card output                  | `true`           |
+| `channels.feishu.blockStreaming`                  | Enable block streaming                        | `true`           |
 
 ---
 
