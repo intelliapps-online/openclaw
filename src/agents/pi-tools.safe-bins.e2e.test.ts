@@ -132,7 +132,7 @@ describe("createOpenClawCodingTools safeBins", () => {
           host: "gateway",
           security: "allowlist",
           ask: "off",
-          safeBins: ["head", "wc"],
+          safeBins: ["grep", "wc"],
         },
       },
     };
@@ -147,9 +147,9 @@ describe("createOpenClawCodingTools safeBins", () => {
     expect(execTool).toBeDefined();
 
     const result = await execTool!.execute("call1", {
-      command: "head $FOO ; wc -l",
+      command: "grep $FOO ; wc -l",
       workdir: tmpDir,
-      env: { FOO: "secret.txt" },
+      env: { FOO: "TOP_SECRET secret.txt" },
     });
     const text = result.content.find((content) => content.type === "text")?.text ?? "";
 
