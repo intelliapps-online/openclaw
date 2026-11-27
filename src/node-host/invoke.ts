@@ -31,6 +31,7 @@ import {
   type ExecHostResponse,
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
+import { sanitizeHostEnvOverrides } from "../infra/host-env-security.js";
 import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 
@@ -41,17 +42,6 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
-
-const blockedEnvKeys = new Set([
-  "NODE_OPTIONS",
-  "PYTHONHOME",
-  "PYTHONPATH",
-  "PERL5LIB",
-  "PERL5OPT",
-  "RUBYOPT",
-]);
-
-const blockedEnvPrefixes = ["DYLD_", "LD_"];
 
 type SystemRunParams = {
   command: string[];
@@ -141,27 +131,9 @@ export function sanitizeEnv(
   if (!overrides) {
     return undefined;
   }
-  const merged = { ...process.env } as Record<string, string>;
-  for (const [rawKey, value] of Object.entries(overrides)) {
-    const key = rawKey.trim();
-    if (!key) {
-      continue;
-    }
-    const upper = key.toUpperCase();
-    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
-    // request-scoped PATH overrides from agents/gateways.
-    if (upper === "PATH") {
-      continue;
-    }
-    if (blockedEnvKeys.has(upper)) {
-      continue;
-    }
-    if (blockedEnvPrefixes.some((prefix) => upper.startsWith(prefix))) {
-      continue;
-    }
-    merged[key] = value;
-  }
-  return merged;
+  // PATH is part of the security boundary (command resolution + safe-bin checks), so it is
+  // dropped along with loader/interpreter control variables.
+  return { ...(process.env as Record<string, string>), ...sanitizeHostEnvOverrides(overrides) };
 }
 
 function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
@@ -544,6 +516,7 @@ export async function handleInvoke(
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = params.sessionKey?.trim() || "node";
   const runId = params.runId?.trim() || crypto.randomUUID();
+  const envOverrides = sanitizeHostEnvOverrides(params.env);
   const env = sanitizeEnv(params.env ?? undefined);
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
   const bins = autoAllowSkills ? await skillBins.current() : new Set<string>();
@@ -583,6 +556,12 @@ export async function handleInvoke(
       security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
     segments = analysis.segments;
   }
+  // Allowlist entries, safe bins and skill bins vouch for argv only. Caller env can make an
+  // allowlisted binary run other code (GIT_CONFIG_*, PAGER, JAVA_TOOL_OPTIONS, ...), so env
+  // overrides always need an explicit approval, which the gateway binds to this exact env.
+  if (envOverrides) {
+    allowlistSatisfied = false;
+  }
   const isWindows = process.platform === "win32";
   const cmdInvocation = shellCommand
     ? isCmdExeInvocation(segments[0]?.argv ?? [])
@@ -602,7 +581,7 @@ export async function handleInvoke(
       command: argv,
       rawCommand: rawCommand || shellCommand || null,
       cwd: params.cwd ?? null,
-      env: params.env ?? null,
+      env: envOverrides,
       timeoutMs: params.timeoutMs ?? null,
       needsScreenRecording: params.needsScreenRecording ?? null,
       agentId: agentId ?? null,

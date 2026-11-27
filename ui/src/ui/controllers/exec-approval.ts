@@ -7,6 +7,7 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  envKeys?: string[] | null;
 };
 
 export type ExecApprovalRequest = {
@@ -56,6 +57,9 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      envKeys: Array.isArray(request.envKeys)
+        ? request.envKeys.filter((key): key is string => typeof key === "string")
+        : null,
     },
     createdAtMs,
     expiresAtMs,

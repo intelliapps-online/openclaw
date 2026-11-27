@@ -18,6 +18,7 @@ import {
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { sanitizeHostEnvOverrides } from "../../infra/host-env-security.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -471,6 +472,7 @@ export function createNodesTool(options?: {
                 host: "node",
                 agentId,
                 sessionKey,
+                env: sanitizeHostEnvOverrides(env) ?? undefined,
                 timeoutMs: APPROVAL_TIMEOUT_MS,
               },
             );

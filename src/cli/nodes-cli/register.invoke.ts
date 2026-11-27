@@ -11,6 +11,7 @@ import {
   minSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
+import { sanitizeHostEnvOverrides } from "../../infra/host-env-security.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -259,6 +260,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
                 agentId,
                 resolvedPath: undefined,
                 sessionKey: undefined,
+                env: sanitizeHostEnvOverrides(nodeEnv) ?? undefined,
                 timeoutMs: approvalTimeoutMs,
               },
               { transportTimeoutMs },

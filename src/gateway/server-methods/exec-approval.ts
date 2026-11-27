@@ -3,6 +3,10 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
+import {
+  computeHostEnvOverridesBinding,
+  listHostEnvOverrideKeys,
+} from "../../infra/host-env-security.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -42,6 +46,7 @@ export function createExecApprovalHandlers(
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
+        env?: Record<string, string>;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -57,6 +62,7 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      const envKeys = listHostEnvOverrideKeys(p.env);
       const request = {
         command: p.command,
         cwd: p.cwd ?? null,
@@ -66,8 +72,10 @@ export function createExecApprovalHandlers(
         agentId: p.agentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: p.sessionKey ?? null,
+        ...(envKeys.length > 0 ? { envKeys } : {}),
       };
       const record = manager.create(request, timeoutMs, explicitId);
+      record.envBinding = computeHostEnvOverridesBinding(p.env);
       record.requestedByConnId = client?.connId ?? null;
       record.requestedByDeviceId = client?.connect?.device?.id ?? null;
       record.requestedByClientId = client?.connect?.client?.id ?? null;

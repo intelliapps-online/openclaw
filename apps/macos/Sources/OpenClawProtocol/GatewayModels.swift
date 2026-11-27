@@ -2481,6 +2481,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public let agentid: AnyCodable?
     public let resolvedpath: AnyCodable?
     public let sessionkey: AnyCodable?
+    public let env: [String: AnyCodable]?
     public let timeoutms: Int?
     public let twophase: Bool?
 
@@ -2494,6 +2495,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         agentid: AnyCodable?,
         resolvedpath: AnyCodable?,
         sessionkey: AnyCodable?,
+        env: [String: AnyCodable]?,
         timeoutms: Int?,
         twophase: Bool?
     ) {
@@ -2506,6 +2508,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         self.agentid = agentid
         self.resolvedpath = resolvedpath
         self.sessionkey = sessionkey
+        self.env = env
         self.timeoutms = timeoutms
         self.twophase = twophase
     }
@@ -2519,6 +2522,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
         case agentid = "agentId"
         case resolvedpath = "resolvedPath"
         case sessionkey = "sessionKey"
+        case env
         case timeoutms = "timeoutMs"
         case twophase = "twoPhase"
     }

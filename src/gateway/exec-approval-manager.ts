@@ -13,6 +13,8 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  // Names of caller-supplied env overrides, shown to approvers.
+  envKeys?: string[] | null;
 };
 
 export type ExecApprovalRecord = {
@@ -20,6 +22,9 @@ export type ExecApprovalRecord = {
   request: ExecApprovalRequestPayload;
   createdAtMs: number;
   expiresAtMs: number;
+  // Digest of the env overrides the approval covers (null = none). Kept off `request` so it is
+  // not broadcast to approval clients.
+  envBinding?: string | null;
   // Caller metadata (best-effort). Used to prevent other clients from replaying an approval id.
   requestedByConnId?: string | null;
   requestedByDeviceId?: string | null;

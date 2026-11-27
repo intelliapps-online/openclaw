@@ -19,6 +19,7 @@ import {
   buildSafeShellCommand,
   buildSafeBinsShellCommand,
 } from "../infra/exec-approvals.js";
+import { sanitizeHostEnvOverrides } from "../infra/host-env-security.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import {
   getShellPathFromLoginShell,
@@ -393,7 +394,10 @@ export function createExecTool(
         validateHostEnv(params.env);
       }
 
-      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      // Host runs only receive the sanitized overrides that the approval checks below account for.
+      const hostEnvOverrides =
+        host === "sandbox" ? params.env : sanitizeHostEnvOverrides(params.env);
+      const mergedEnv = hostEnvOverrides ? { ...baseEnv, ...hostEnvOverrides } : baseEnv;
 
       const env = sandbox
         ? buildSandboxEnv({
@@ -466,6 +470,7 @@ export function createExecTool(
         const argv = buildNodeShellCommand(params.command, nodeInfo?.platform);
 
         const nodeEnv = params.env ? { ...params.env } : undefined;
+        const nodeEnvOverrides = sanitizeHostEnvOverrides(nodeEnv);
         const baseAllowlistEval = evaluateShellAllowlist({
           command: params.command,
           allowlist: [],
@@ -508,6 +513,10 @@ export function createExecTool(
           } catch {
             // Fall back to requiring approval if node approvals cannot be fetched.
           }
+        }
+        // The node host treats env overrides as outside the allowlist; ask up front.
+        if (nodeEnvOverrides) {
+          allowlistSatisfied = false;
         }
         const requiresAsk = requiresExecApproval({
           ask: hostAsk,
@@ -567,6 +576,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath: undefined,
                   sessionKey: defaults?.sessionKey,
+                  env: nodeEnvOverrides ?? undefined,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
@@ -714,8 +724,13 @@ export function createExecTool(
         });
         const allowlistMatches = allowlistEval.allowlistMatches;
         const analysisOk = allowlistEval.analysisOk;
+        // Allowlist entries vouch for argv only; caller env can make an allowlisted binary run
+        // other code (GIT_CONFIG_*, PAGER, ...), so env overrides always need approval.
+        const envOverrides = sanitizeHostEnvOverrides(params.env);
         const allowlistSatisfied =
-          hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+          hostSecurity === "allowlist" && analysisOk && !envOverrides
+            ? allowlistEval.allowlistSatisfied
+            : false;
         const requiresAsk = requiresExecApproval({
           ask: hostAsk,
           security: hostSecurity,
@@ -751,6 +766,7 @@ export function createExecTool(
                   agentId,
                   resolvedPath,
                   sessionKey: defaults?.sessionKey,
+                  env: envOverrides ?? undefined,
                   timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
                 },
               );
