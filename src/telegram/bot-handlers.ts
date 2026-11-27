@@ -461,6 +461,58 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      // Reactions land in the same sessions as messages, so the reacting user must pass
+      // the same DM/group access gates a message sender would.
+      const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
+      const isForum = reaction.chat.is_forum === true;
+      const reactionSenderId = user?.id != null ? String(user.id) : "";
+      const reactionSenderUsername = user?.username ?? "";
+      const reactionAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
+        isForum,
+        messageThreadId: undefined,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
+      });
+      if (
+        shouldSkipGroupMessage({
+          isGroup,
+          chatId,
+          chatTitle: reaction.chat.title,
+          resolvedThreadId: reactionAllowContext.resolvedThreadId,
+          senderId: reactionSenderId,
+          senderUsername: reactionSenderUsername,
+          effectiveGroupAllow: reactionAllowContext.effectiveGroupAllow,
+          hasGroupAllowOverride: reactionAllowContext.hasGroupAllowOverride,
+          groupConfig: reactionAllowContext.groupConfig,
+          topicConfig: reactionAllowContext.topicConfig,
+        })
+      ) {
+        return;
+      }
+      if (!isGroup) {
+        const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+        if (dmPolicy === "disabled") {
+          return;
+        }
+        if (dmPolicy !== "open") {
+          const effectiveDmAllow = normalizeAllowFromWithStore({
+            allowFrom: telegramCfg.allowFrom,
+            storeAllowFrom: reactionAllowContext.storeAllowFrom,
+          });
+          if (
+            !reactionSenderId ||
+            !isAllowlistAuthorized(effectiveDmAllow, reactionSenderId, reactionSenderUsername)
+          ) {
+            logVerbose(
+              `Blocked telegram reaction from ${reactionSenderId || "unknown"} (dmPolicy=${dmPolicy})`,
+            );
+            return;
+          }
+        }
+      }
+
       // Detect added reactions.
       const oldEmojis = new Set(
         reaction.old_reaction
@@ -494,8 +546,6 @@ export const registerTelegramHandlers = ({
       // Reactions target a specific message_id; the Telegram Bot API does not include
       // message_thread_id on MessageReactionUpdated, so we route to the chat-level
       // session (forum topic routing is not available for reactions).
-      const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
-      const isForum = reaction.chat.is_forum === true;
       const resolvedThreadId = isForum
         ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
         : undefined;
