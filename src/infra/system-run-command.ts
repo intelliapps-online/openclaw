@@ -35,7 +35,8 @@ export function formatExecCommand(argv: string[]): string {
     .join(" ");
 }
 
-export function extractShellCommandFromArgv(argv: string[]): string | null {
+/** Index of the shell payload in a recognized shell wrapper argv (`sh -lc "<cmd>"`). */
+export function resolveShellCommandArgIndex(argv: string[]): number | null {
   const token0 = argv[0]?.trim();
   if (!token0) {
     return null;
@@ -55,8 +56,7 @@ export function extractShellCommandFromArgv(argv: string[]): string | null {
     if (flag !== "-lc" && flag !== "-c") {
       return null;
     }
-    const cmd = argv[2];
-    return typeof cmd === "string" ? cmd : null;
+    return typeof argv[2] === "string" ? 2 : null;
   }
 
   // Windows cmd.exe: cmd.exe /d /s /c "<cmd>"
@@ -65,11 +65,15 @@ export function extractShellCommandFromArgv(argv: string[]): string | null {
     if (idx === -1) {
       return null;
     }
-    const cmd = argv[idx + 1];
-    return typeof cmd === "string" ? cmd : null;
+    return typeof argv[idx + 1] === "string" ? idx + 1 : null;
   }
 
   return null;
+}
+
+export function extractShellCommandFromArgv(argv: string[]): string | null {
+  const idx = resolveShellCommandArgIndex(argv);
+  return idx === null ? null : argv[idx];
 }
 
 export function validateSystemRunCommandConsistency(params: {
