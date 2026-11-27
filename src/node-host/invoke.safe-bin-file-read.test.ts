@@ -138,9 +138,8 @@ async function withNodeHost(params: {
       const cwdBefore = snapshotTree(cwd);
       const secretBytes = fs.readFileSync(secretPath);
       await handleInvoke(frame, client, { current: async () => new Set<string>() });
-      const captured = results.find((entry) => entry.ok || !entry.ok);
-      expect(captured).toBeDefined();
-      const parsed = parseRunOutput(captured as InvokeCapture);
+      expect(results).toHaveLength(1);
+      const parsed = parseRunOutput(results[0]);
       expect(fs.readFileSync(secretPath)).toEqual(secretBytes);
       expect(snapshotTree(secretHome)).toEqual(secretBefore);
       expect(snapshotTree(cwd)).toEqual(cwdBefore);
