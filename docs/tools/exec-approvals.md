@@ -135,6 +135,10 @@ Shell chaining (`&&`, `||`, `;`) is allowed when every top-level segment satisfi
 (including safe bins or skill auto-allow). Redirections remain unsupported in allowlist mode.
 Command substitution (`$()` / backticks) is rejected during allowlist parsing, including inside
 double quotes; use single quotes if you need literal `$()` text.
+Heredocs (`<<`) are allowed only when the body cannot expand into commands: quote the delimiter
+(`<<'EOF'`) for literal bodies; unquoted bodies may only reference plain `$NAME` variables (no
+`$()`, `${}`, `$[]`, backticks, or trailing `\` line continuations). Nothing may follow the
+heredoc terminator line.
 
 Default safe bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
