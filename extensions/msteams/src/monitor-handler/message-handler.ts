@@ -123,6 +123,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const isDirectMessage = !isGroupChat && !isChannel;
 
     const senderName = from.name ?? from.id;
+    // Authorize on the immutable id only; from.name is a mutable, non-unique label.
     const senderId = from.aadObjectId ?? from.id;
     const storedAllowFrom = await core.channel.pairing
       .readAllowFromStore("msteams")
@@ -146,7 +147,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         const allowMatch = resolveMSTeamsAllowlistMatch({
           allowFrom: effectiveAllowFrom,
           senderId,
-          senderName,
         });
 
         if (!allowMatch.allowed) {
@@ -227,7 +227,6 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           const allowMatch = resolveMSTeamsAllowlistMatch({
             allowFrom: effectiveGroupAllowFrom,
             senderId,
-            senderName,
           });
           if (!allowMatch.allowed) {
             log.debug?.("dropping group message (not in groupAllowFrom)", {
@@ -245,13 +244,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       groupPolicy: "allowlist",
       allowFrom: effectiveDmAllowFrom,
       senderId,
-      senderName,
     });
     const groupAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
       allowFrom: effectiveGroupAllowFrom,
       senderId,
-      senderName,
     });
     const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
     const commandGate = resolveControlCommandGate({

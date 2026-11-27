@@ -561,7 +561,6 @@ export async function handleFeishuMessage(params: {
       groupPolicy,
       allowFrom: groupAllowFrom,
       senderId: ctx.chatId, // Check group ID, not sender ID
-      senderName: undefined,
     });
 
     if (!groupAllowed) {
@@ -576,7 +575,6 @@ export async function handleFeishuMessage(params: {
         groupPolicy: "allowlist",
         allowFrom: senderAllowFrom,
         senderId: ctx.senderOpenId,
-        senderName: ctx.senderName,
       });
       if (!senderAllowed) {
         log(`feishu: sender ${ctx.senderOpenId} not in group ${ctx.chatId} sender allowlist`);
@@ -626,7 +624,6 @@ export async function handleFeishuMessage(params: {
     const dmAllowed = resolveFeishuAllowlistMatch({
       allowFrom: effectiveDmAllowFrom,
       senderId: ctx.senderOpenId,
-      senderName: ctx.senderName,
     }).allowed;
 
     if (!isGroup && dmPolicy !== "open" && !dmAllowed) {
@@ -667,7 +664,6 @@ export async function handleFeishuMessage(params: {
     const senderAllowedForCommands = resolveFeishuAllowlistMatch({
       allowFrom: commandAllowFrom,
       senderId: ctx.senderOpenId,
-      senderName: ctx.senderName,
     }).allowed;
     const commandAuthorized = shouldComputeCommandAuthorized
       ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({

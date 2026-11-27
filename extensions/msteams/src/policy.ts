@@ -2,6 +2,7 @@ import type {
   AllowlistMatch,
   ChannelGroupContext,
   GroupPolicy,
+  GroupToolPolicyBySenderConfig,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
   MSTeamsConfig,
@@ -90,6 +91,14 @@ export function resolveMSTeamsRouteConfig(params: {
   };
 }
 
+// Keyed on the sender id only; display names must not select a per-sender tool policy.
+function resolveMSTeamsToolsBySender(
+  toolsBySender: GroupToolPolicyBySenderConfig | undefined,
+  senderId: string | null | undefined,
+): GroupToolPolicyConfig | undefined {
+  return resolveToolsBySender({ toolsBySender, senderId });
+}
+
 export function resolveMSTeamsGroupToolPolicy(
   params: ChannelGroupContext,
 ): GroupToolPolicyConfig | undefined {
@@ -110,39 +119,30 @@ export function resolveMSTeamsGroupToolPolicy(
   });
 
   if (resolved.channelConfig) {
-    const senderPolicy = resolveToolsBySender({
-      toolsBySender: resolved.channelConfig.toolsBySender,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
+    const senderPolicy = resolveMSTeamsToolsBySender(
+      resolved.channelConfig.toolsBySender,
+      params.senderId,
+    );
     if (senderPolicy) {
       return senderPolicy;
     }
     if (resolved.channelConfig.tools) {
       return resolved.channelConfig.tools;
     }
-    const teamSenderPolicy = resolveToolsBySender({
-      toolsBySender: resolved.teamConfig?.toolsBySender,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
+    const teamSenderPolicy = resolveMSTeamsToolsBySender(
+      resolved.teamConfig?.toolsBySender,
+      params.senderId,
+    );
     if (teamSenderPolicy) {
       return teamSenderPolicy;
     }
     return resolved.teamConfig?.tools;
   }
   if (resolved.teamConfig) {
-    const teamSenderPolicy = resolveToolsBySender({
-      toolsBySender: resolved.teamConfig.toolsBySender,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
-    });
+    const teamSenderPolicy = resolveMSTeamsToolsBySender(
+      resolved.teamConfig.toolsBySender,
+      params.senderId,
+    );
     if (teamSenderPolicy) {
       return teamSenderPolicy;
     }
@@ -168,26 +168,17 @@ export function resolveMSTeamsGroupToolPolicy(
       normalizeKey: normalizeChannelSlug,
     });
     if (match.entry) {
-      const senderPolicy = resolveToolsBySender({
-        toolsBySender: match.entry.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
+      const senderPolicy = resolveMSTeamsToolsBySender(match.entry.toolsBySender, params.senderId);
       if (senderPolicy) {
         return senderPolicy;
       }
       if (match.entry.tools) {
         return match.entry.tools;
       }
-      const teamSenderPolicy = resolveToolsBySender({
-        toolsBySender: teamConfig?.toolsBySender,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
-      });
+      const teamSenderPolicy = resolveMSTeamsToolsBySender(
+        teamConfig?.toolsBySender,
+        params.senderId,
+      );
       if (teamSenderPolicy) {
         return teamSenderPolicy;
       }
@@ -203,14 +194,18 @@ export type MSTeamsReplyPolicy = {
   replyStyle: MSTeamsReplyStyle;
 };
 
-export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
 
+/**
+ * Teams display names are neither unique nor trusted (guests choose their own),
+ * so sender allowlists match only the AAD object id / Bot Framework user id.
+ * Name and UPN entries work only after startup resolves them to object ids.
+ */
 export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;
   senderId: string;
-  senderName?: string | null;
 }): MSTeamsAllowlistMatch {
-  return resolveAllowlistMatchSimple(params);
+  return resolveAllowlistMatchSimple({ allowFrom: params.allowFrom, senderId: params.senderId });
 }
 
 export function resolveMSTeamsReplyPolicy(params: {
@@ -244,7 +239,6 @@ export function isMSTeamsGroupAllowed(params: {
   groupPolicy: GroupPolicy;
   allowFrom: Array<string | number>;
   senderId: string;
-  senderName?: string | null;
 }): boolean {
   const { groupPolicy } = params;
   if (groupPolicy === "disabled") {
