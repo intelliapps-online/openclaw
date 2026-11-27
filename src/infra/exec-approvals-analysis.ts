@@ -262,63 +262,176 @@ function isDoubleQuoteEscape(next: string | undefined): next is string {
   return Boolean(next && DOUBLE_QUOTE_ESCAPES.has(next));
 }
 
-function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
-  type HeredocSpec = {
-    delimiter: string;
-    stripTabs: boolean;
-  };
+type HeredocSpec = {
+  delimiter: string;
+  stripTabs: boolean;
+  // Any quoting in the delimiter word disables expansion in the body.
+  quoted: boolean;
+};
 
-  const parseHeredocDelimiter = (
-    source: string,
-    start: number,
-  ): { delimiter: string; end: number } | null => {
-    let i = start;
-    while (i < source.length && (source[i] === " " || source[i] === "\t")) {
-      i += 1;
+const HEREDOC_WORD_BREAKS = new Set([" ", "\t", "\n", "|", "&", ";", "<", ">", "(", ")"]);
+
+/**
+ * Parses the delimiter word after `<<` / `<<-` the way POSIX shells do (quote removal, and
+ * `quoted` if any part of the word is quoted or escaped). Returns null for anything we cannot
+ * map unambiguously to a terminator line, so callers fail closed.
+ */
+function parseHeredocDelimiter(
+  source: string,
+  start: number,
+): { delimiter: string; quoted: boolean; end: number } | null {
+  let i = start;
+  while (i < source.length && (source[i] === " " || source[i] === "\t")) {
+    i += 1;
+  }
+  let delimiter = "";
+  let quoted = false;
+  while (i < source.length) {
+    const ch = source[i];
+    if (HEREDOC_WORD_BREAKS.has(ch)) {
+      break;
     }
-    if (i >= source.length) {
+    // Shells disagree on `$'...'`, `$x` and comments here; other whitespace (e.g. `\r`) is part of
+    // the word for the shell but easy to misread, so reject all of them.
+    if (ch === "$" || ch === "`" || ch === "#" || /\s/.test(ch)) {
       return null;
     }
-
-    const first = source[i];
-    if (first === "'" || first === '"') {
-      const quote = first;
+    if (ch === "\\") {
+      const escapedCh = source[i + 1];
+      if (escapedCh === undefined || /\s/.test(escapedCh)) {
+        return null;
+      }
+      delimiter += escapedCh;
+      quoted = true;
+      i += 2;
+      continue;
+    }
+    if (ch === "'") {
+      const close = source.indexOf("'", i + 1);
+      if (close === -1) {
+        return null;
+      }
+      const content = source.slice(i + 1, close);
+      if (/[\n\r]/.test(content)) {
+        return null;
+      }
+      delimiter += content;
+      quoted = true;
+      i = close + 1;
+      continue;
+    }
+    if (ch === '"') {
       i += 1;
-      let delimiter = "";
+      let closed = false;
       while (i < source.length) {
-        const ch = source[i];
-        if (ch === "\n" || ch === "\r") {
+        const inner = source[i];
+        if (inner === '"') {
+          closed = true;
+          i += 1;
+          break;
+        }
+        if (inner === "$" || inner === "`" || inner === "\n" || inner === "\r") {
           return null;
         }
-        if (quote === '"' && ch === "\\" && i + 1 < source.length) {
-          delimiter += source[i + 1];
-          i += 2;
-          continue;
+        if (inner === "\\") {
+          const escapedCh = source[i + 1];
+          if (escapedCh === "\\" || escapedCh === '"' || escapedCh === "$" || escapedCh === "`") {
+            delimiter += escapedCh;
+            i += 2;
+            continue;
+          }
+          if (escapedCh === undefined || escapedCh === "\n" || escapedCh === "\r") {
+            return null;
+          }
         }
-        if (ch === quote) {
-          return { delimiter, end: i + 1 };
-        }
-        delimiter += ch;
+        delimiter += inner;
         i += 1;
       }
-      return null;
-    }
-
-    let delimiter = "";
-    while (i < source.length) {
-      const ch = source[i];
-      if (/\s/.test(ch) || ch === "|" || ch === "&" || ch === ";" || ch === "<" || ch === ">") {
-        break;
+      if (!closed) {
+        return null;
       }
-      delimiter += ch;
-      i += 1;
+      quoted = true;
+      continue;
     }
-    if (!delimiter) {
-      return null;
-    }
-    return { delimiter, end: i };
-  };
+    delimiter += ch;
+    i += 1;
+  }
+  if (!delimiter) {
+    return null;
+  }
+  return { delimiter, quoted, end: i };
+}
 
+/**
+ * Returns the first token in an unquoted heredoc body line that the shell would expand into
+ * something other than a plain parameter value, or null when the line is inert.
+ * Only `$NAME` / `$1` references are allowed; `$(`, `${`, `$[`, `$((`, backticks and
+ * backslash-newline continuations (which can splice lines into a substitution or a terminator)
+ * are rejected.
+ */
+function findUnsafeHeredocLineToken(line: string): string | null {
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "`") {
+      return "`";
+    }
+    if (ch === "\\" && i === line.length - 1) {
+      return "\\ line continuation";
+    }
+    if (ch !== "$") {
+      continue;
+    }
+    let j = i + 1;
+    while (j < line.length && /[A-Za-z0-9_]/.test(line[j])) {
+      j += 1;
+    }
+    if (j === i + 1) {
+      return `$${line[i + 1] ?? ""}`;
+    }
+    // zsh evaluates unbraced subscripts (`$name[...]`).
+    if (line[j] === "[") {
+      return "$name[";
+    }
+    i = j - 1;
+  }
+  return null;
+}
+
+/**
+ * Consumes heredoc bodies starting at `start` (the character after the newline that ends the
+ * command line) until every pending heredoc has seen its terminator line. Mutates `pending`.
+ * Lines are split on `\n` only, matching the shell.
+ */
+function scanHeredocBodies(
+  source: string,
+  start: number,
+  pending: HeredocSpec[],
+  validate: boolean,
+): { ok: true; end: number } | { ok: false; reason: string } {
+  let i = start;
+  while (pending.length > 0) {
+    if (i >= source.length) {
+      return { ok: false, reason: "unterminated heredoc" };
+    }
+    const newline = source.indexOf("\n", i);
+    const lineEnd = newline === -1 ? source.length : newline;
+    const line = source.slice(i, lineEnd);
+    const current = pending[0];
+    const compared = current.stripTabs ? line.replace(/^\t+/, "") : line;
+    if (compared === current.delimiter) {
+      pending.shift();
+    } else if (validate && !current.quoted) {
+      const unsafe = findUnsafeHeredocLineToken(line);
+      if (unsafe) {
+        return { ok: false, reason: `unsupported shell token in heredoc: ${unsafe}` };
+      }
+    }
+    i = newline === -1 ? source.length : newline + 1;
+  }
+  return { ok: true, end: i };
+}
+
+function splitShellPipeline(command: string): { ok: boolean; reason?: string; segments: string[] } {
   const segments: string[] = [];
   let buf = "";
   let inSingle = false;
@@ -326,8 +439,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   let escaped = false;
   let emptySegment = false;
   const pendingHeredocs: HeredocSpec[] = [];
-  let inHeredocBody = false;
-  let heredocLine = "";
 
   const pushPart = () => {
     const trimmed = buf.trim();
@@ -340,28 +451,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const next = command[i + 1];
-
-    if (inHeredocBody) {
-      if (ch === "\n" || ch === "\r") {
-        const current = pendingHeredocs[0];
-        if (current) {
-          const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-          if (line === current.delimiter) {
-            pendingHeredocs.shift();
-          }
-        }
-        heredocLine = "";
-        if (pendingHeredocs.length === 0) {
-          inHeredocBody = false;
-        }
-        if (ch === "\r" && next === "\n") {
-          i += 1;
-        }
-      } else {
-        heredocLine += ch;
-      }
-      continue;
-    }
 
     if (escaped) {
       buf += ch;
@@ -420,13 +509,27 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       continue;
     }
 
-    if ((ch === "\n" || ch === "\r") && pendingHeredocs.length > 0) {
-      inHeredocBody = true;
-      heredocLine = "";
-      if (ch === "\r" && next === "\n") {
-        i += 1;
+    if (ch === "\n" && pendingHeredocs.length > 0) {
+      const scanned = scanHeredocBodies(command, i + 1, pendingHeredocs, true);
+      if (!scanned.ok) {
+        return { ok: false, reason: scanned.reason, segments: [] };
       }
-      continue;
+      // Anything after the last terminator line is a new shell command, never more argv for
+      // the command that owns the heredoc.
+      if (command.slice(scanned.end).trim()) {
+        return {
+          ok: false,
+          reason: "unsupported shell token: command after heredoc",
+          segments: [],
+        };
+      }
+      break;
+    }
+
+    // Unquoted `#` at the start of a word begins a comment, which would hide a `<<` from the
+    // shell while we still treated the following lines as a heredoc body.
+    if (ch === "#" && (buf.length === 0 || /\s$/.test(buf))) {
+      return { ok: false, reason: "unsupported shell token: #", segments: [] };
     }
 
     if (ch === "|" && next === "|") {
@@ -457,11 +560,12 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
       }
 
       const parsed = parseHeredocDelimiter(command, scanIndex);
-      if (parsed) {
-        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs });
-        buf += command.slice(scanIndex, parsed.end);
-        i = parsed.end - 1;
+      if (!parsed) {
+        return { ok: false, reason: "unsupported heredoc delimiter", segments: [] };
       }
+      pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
+      buf += command.slice(scanIndex, parsed.end);
+      i = parsed.end - 1;
       continue;
     }
     if (DISALLOWED_PIPELINE_TOKENS.has(ch)) {
@@ -472,14 +576,6 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     }
     buf += ch;
     emptySegment = false;
-  }
-
-  if (inHeredocBody && pendingHeredocs.length > 0) {
-    const current = pendingHeredocs[0];
-    const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
-    if (line === current.delimiter) {
-      pendingHeredocs.shift();
-    }
   }
 
   if (escaped || inSingle || inDouble) {
@@ -609,6 +705,7 @@ export function splitCommandChainWithOperators(command: string): ShellChainPart[
   let escaped = false;
   let foundChain = false;
   let invalidChain = false;
+  const pendingHeredocs: HeredocSpec[] = [];
 
   const pushPart = (opToNext: ShellChainOperator | null) => {
     const trimmed = buf.trim();
@@ -662,6 +759,44 @@ export function splitCommandChainWithOperators(command: string): ShellChainPart[
       inDouble = true;
       buf += ch;
       continue;
+    }
+
+    // Keep heredoc bodies inside the part that owns them so operators in a body never split it.
+    if (ch === "<" && next === "<") {
+      let scanIndex = i + 2;
+      if (command[scanIndex] === "-") {
+        scanIndex += 1;
+      }
+      const parsed = parseHeredocDelimiter(command, scanIndex);
+      if (parsed) {
+        pendingHeredocs.push({
+          delimiter: parsed.delimiter,
+          stripTabs: scanIndex > i + 2,
+          quoted: parsed.quoted,
+        });
+        buf += command.slice(i, parsed.end);
+        i = parsed.end - 1;
+      } else {
+        buf += "<<";
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === "\n" && pendingHeredocs.length > 0) {
+      const scanned = scanHeredocBodies(command, i + 1, pendingHeredocs, false);
+      if (!scanned.ok) {
+        return null;
+      }
+      buf += command.slice(i, scanned.end);
+      i = scanned.end - 1;
+      continue;
+    }
+    // A chain operator before the heredoc body starts would leave the body in a later part.
+    if (
+      pendingHeredocs.length > 0 &&
+      ((ch === "&" && next === "&") || (ch === "|" && next === "|") || ch === ";")
+    ) {
+      return null;
     }
 
     if (ch === "&" && next === "&") {
