@@ -5,6 +5,7 @@
  */
 
 import type { ChannelStatusIssue } from "openclaw/plugin-sdk";
+import { hasTwitchAccessRules, isTwitchOpenToAllViewers } from "./access-control.js";
 import { getAccountConfig } from "./config.js";
 import { resolveTwitchToken } from "./token.js";
 import type { ChannelAccountSnapshot } from "./types.js";
@@ -109,13 +110,24 @@ export function collectTwitchStatusIssues(
         });
       }
 
-      if (account.allowFrom && account.allowFrom.length === 0) {
+      if (!hasTwitchAccessRules(account)) {
         issues.push({
           channel: "twitch",
           accountId,
           kind: "config",
-          message: "allowFrom is configured but empty",
-          fix: "Either add user IDs to allowFrom, remove the allowFrom field, or use allowedRoles instead.",
+          message:
+            account.allowFrom && account.allowFrom.length === 0
+              ? "allowFrom is configured but empty and no allowedRoles are set; all chat messages are ignored"
+              : "No allowFrom or allowedRoles configured; all chat messages are ignored",
+          fix: 'Add Twitch user IDs to allowFrom, or set allowedRoles (e.g. ["moderator"]). Use allowedRoles: ["all"] only if every viewer should be able to trigger the agent.',
+        });
+      } else if (isTwitchOpenToAllViewers(account)) {
+        issues.push({
+          channel: "twitch",
+          accountId,
+          kind: "config",
+          message: "allowedRoles includes 'all'; any Twitch viewer can trigger the agent",
+          fix: 'Restrict access with allowFrom (Twitch user IDs) or specific allowedRoles such as ["moderator"].',
         });
       }
 

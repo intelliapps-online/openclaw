@@ -41,7 +41,7 @@ Details: [Plugins](/tools/plugin)
    - If both are set, config takes precedence (env fallback is default-account only).
 5. Start the gateway.
 
-**⚠️ Important:** Add access control (`allowFrom` or `allowedRoles`) to prevent unauthorized users from triggering the bot. `requireMention` defaults to `true`.
+**⚠️ Important:** Access control is required. Twitch chat is public, so the bot ignores every message until you set `allowFrom` (user IDs) or `allowedRoles`. Only `allowedRoles: ["all"]` opens the bot to every viewer (flagged by `openclaw security audit`). `requireMention` defaults to `true`.
 
 Minimal config:
 
@@ -105,7 +105,7 @@ OPENCLAW_TWITCH_ACCESS_TOKEN=oauth:abc123...
 
 If both env and config are set, config takes precedence.
 
-### Access control (recommended)
+### Access control (required)
 
 ```json5
 {
@@ -118,8 +118,9 @@ If both env and config are set, config takes precedence.
 ```
 
 Prefer `allowFrom` for a hard allowlist. Use `allowedRoles` instead if you want role-based access.
+If neither is set (or both are empty lists), all chat messages are ignored and the gateway logs a warning at startup.
 
-**Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`.
+**Available roles:** `"moderator"`, `"owner"`, `"vip"`, `"subscriber"`, `"all"`. `"all"` lets any Twitch viewer trigger the agent and its tools.
 
 **Why user IDs?** Usernames can change, allowing impersonation. User IDs are permanent.
 
@@ -257,8 +258,8 @@ openclaw channels status --probe
 
 ### Bot doesn't respond to messages
 
-**Check access control:** Ensure your user ID is in `allowFrom`, or temporarily remove
-`allowFrom` and set `allowedRoles: ["all"]` to test.
+**Check access control:** Ensure your user ID is in `allowFrom` or that you have one of the
+`allowedRoles`. With neither configured, the bot ignores all messages.
 
 **Check the bot is in the channel:** The bot must join the channel specified in `channel`.
 

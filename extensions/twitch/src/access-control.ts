@@ -21,8 +21,12 @@ export type TwitchAccessControlResult = {
  * 2. If `allowFrom` is set, sender must be in the allowlist (by user ID)
  * 3. If `allowedRoles` is set (and `allowFrom` is not), sender must have at least one role
  *
+ * 4. Otherwise the message is rejected
+ *
  * Note: `allowFrom` is a hard allowlist. When set, only those user IDs are allowed.
  * Use `allowedRoles` as an alternative when you don't want to maintain an allowlist.
+ * Twitch chat is public, so access fails closed: with neither list configured (or both
+ * empty) nobody is allowed. Opening the bot to every viewer requires `allowedRoles: ["all"]`.
  *
  * Available roles:
  * - "moderator": Moderators
@@ -105,8 +109,18 @@ export function checkTwitchAccessControl(params: {
   }
 
   return {
-    allowed: true,
+    allowed: false,
+    reason: "no allowFrom or allowedRoles configured",
   };
+}
+
+export function hasTwitchAccessRules(account: TwitchAccountConfig): boolean {
+  return (account.allowFrom?.length ?? 0) > 0 || (account.allowedRoles?.length ?? 0) > 0;
+}
+
+/** True when `allowedRoles: ["all"]` is the effective rule (no hard allowlist overrides it). */
+export function isTwitchOpenToAllViewers(account: TwitchAccountConfig): boolean {
+  return (account.allowFrom?.length ?? 0) === 0 && (account.allowedRoles?.includes("all") ?? false);
 }
 
 /**
