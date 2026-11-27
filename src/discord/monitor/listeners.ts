@@ -7,16 +7,25 @@ import {
   PresenceUpdateListener,
   type User,
 } from "@buape/carbon";
-import { danger } from "../../globals.js";
+import type { DmPolicy, GroupPolicy } from "../../config/types.base.js";
+import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { resolveDiscordAccount } from "../accounts.js";
 import {
+  allowListMatches,
+  isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
+  resolveDiscordMemberAccessState,
+  resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
+  type DiscordChannelConfigResolved,
 } from "./allow-list.js";
 import { formatDiscordReactionEmoji, formatDiscordUserTag } from "./format.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -39,7 +48,78 @@ type DiscordReactionListenerParams = {
   botUserId?: string;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
+  /** Overrides for the account's DM/group access settings; unset fields fall back to config. */
+  dmEnabled?: boolean;
+  dmPolicy?: DmPolicy;
+  allowFrom?: string[];
+  groupDmEnabled?: boolean;
+  groupDmChannels?: string[];
+  groupPolicy?: GroupPolicy;
 };
+
+type DiscordReactionAccess = {
+  dmEnabled: boolean;
+  dmPolicy: DmPolicy;
+  allowFrom?: string[];
+  groupDmEnabled: boolean;
+  groupDmChannels?: string[];
+  groupPolicy: GroupPolicy;
+};
+
+function resolveDiscordReactionAccess(
+  params: DiscordReactionListenerParams,
+): DiscordReactionAccess {
+  const discordCfg = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId }).config;
+  const dmConfig = discordCfg.dm;
+  return {
+    dmEnabled: params.dmEnabled ?? dmConfig?.enabled ?? true,
+    dmPolicy: params.dmPolicy ?? discordCfg.dmPolicy ?? dmConfig?.policy ?? "pairing",
+    allowFrom: params.allowFrom ?? discordCfg.allowFrom ?? dmConfig?.allowFrom,
+    groupDmEnabled: params.groupDmEnabled ?? dmConfig?.groupEnabled ?? false,
+    groupDmChannels: params.groupDmChannels ?? dmConfig?.groupChannels,
+    groupPolicy:
+      params.groupPolicy ??
+      discordCfg.groupPolicy ??
+      params.cfg.channels?.defaults?.groupPolicy ??
+      "open",
+  };
+}
+
+const REACTION_LABEL_MAX_CHARS = 100;
+
+// Labels end up inside agent-visible system event text; keep them single-line and bounded.
+function sanitizeReactionLabel(value: string): string {
+  const flattened = value
+    .replace(/[\p{Cc}\u2028\u2029]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const chars = Array.from(flattened);
+  return chars.length > REACTION_LABEL_MAX_CHARS
+    ? `${chars.slice(0, REACTION_LABEL_MAX_CHARS).join("")}…`
+    : flattened;
+}
+
+async function isDiscordDmReactorAllowed(access: DiscordReactionAccess, user: User) {
+  if (!access.dmEnabled || access.dmPolicy === "disabled") {
+    return false;
+  }
+  if (access.dmPolicy === "open") {
+    return true;
+  }
+  const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+  const allowList = normalizeDiscordAllowList(
+    [...(access.allowFrom ?? []), ...storeAllowFrom],
+    ["discord:", "user:", "pk:"],
+  );
+  if (!allowList) {
+    return false;
+  }
+  return allowListMatches(allowList, {
+    id: user.id,
+    name: user.username ?? undefined,
+    tag: formatDiscordUserTag(user),
+  });
+}
 
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 30_000;
 const discordEventQueueLog = createSubsystemLogger("discord/event-queue");
@@ -104,8 +184,11 @@ export class DiscordMessageListener extends MessageCreateListener {
 }
 
 export class DiscordReactionListener extends MessageReactionAddListener {
+  private access: DiscordReactionAccess;
+
   constructor(private params: DiscordReactionListenerParams) {
     super();
+    this.access = resolveDiscordReactionAccess(params);
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
@@ -114,6 +197,7 @@ export class DiscordReactionListener extends MessageReactionAddListener {
       client,
       action: "added",
       handlerParams: this.params,
+      access: this.access,
       listener: this.constructor.name,
       event: this.type,
     });
@@ -121,8 +205,11 @@ export class DiscordReactionListener extends MessageReactionAddListener {
 }
 
 export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
+  private access: DiscordReactionAccess;
+
   constructor(private params: DiscordReactionListenerParams) {
     super();
+    this.access = resolveDiscordReactionAccess(params);
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
@@ -131,6 +218,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
       client,
       action: "removed",
       handlerParams: this.params,
+      access: this.access,
       listener: this.constructor.name,
       event: this.type,
     });
@@ -142,6 +230,7 @@ async function runDiscordReactionHandler(params: {
   client: Client;
   action: "added" | "removed";
   handlerParams: DiscordReactionListenerParams;
+  access: DiscordReactionAccess;
   listener: string;
   event: string;
 }): Promise<void> {
@@ -151,6 +240,7 @@ async function runDiscordReactionHandler(params: {
       data: params.data,
       client: params.client,
       action: params.action,
+      access: params.access,
       cfg: params.handlerParams.cfg,
       accountId: params.handlerParams.accountId,
       botUserId: params.handlerParams.botUserId,
@@ -171,6 +261,7 @@ async function handleDiscordReactionEvent(params: {
   data: DiscordReactionEvent;
   client: Client;
   action: "added" | "removed";
+  access: DiscordReactionAccess;
   cfg: LoadedConfig;
   accountId: string;
   botUserId?: string;
@@ -178,7 +269,7 @@ async function handleDiscordReactionEvent(params: {
   logger: Logger;
 }) {
   try {
-    const { data, client, action, botUserId, guildEntries } = params;
+    const { data, client, action, access, botUserId, guildEntries } = params;
     if (!("user" in data)) {
       return;
     }
@@ -216,19 +307,81 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
+    // Guild reactions must land in guild channels and non-guild reactions in (group) DMs;
+    // anything else cannot be mapped onto an access policy.
+    if (isGuildMessage === (isDirectMessage || isGroupDm)) {
+      return;
+    }
+    // Reactions reach the same sessions as messages, so the reacting user must pass the
+    // same DM/group gates as a message sender would in preflight.
+    if (isDirectMessage && !(await isDiscordDmReactorAllowed(access, user))) {
+      logVerbose(
+        `discord: drop dm reaction from ${user.id} (dmEnabled=${access.dmEnabled}, dmPolicy=${access.dmPolicy})`,
+      );
+      return;
+    }
+    if (isGroupDm) {
+      if (!access.groupDmEnabled) {
+        return;
+      }
+      const groupDmAllowed = resolveGroupDmAllow({
+        channels: access.groupDmChannels,
+        channelId: data.channel_id,
+        channelName,
+        channelSlug,
+      });
+      if (!groupDmAllowed) {
+        return;
+      }
+    }
     let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
     let parentName: string | undefined;
     let parentSlug = "";
     const memberRoleIds = Array.isArray(data.rawMember?.roles)
       ? data.rawMember.roles.map((roleId: string) => String(roleId))
       : [];
+    const isGuildReactionAllowed = (channelConfig: DiscordChannelConfigResolved | null) => {
+      if (!isGuildMessage) {
+        return true;
+      }
+      if (channelConfig?.enabled === false) {
+        return false;
+      }
+      const channelAllowed = channelConfig?.allowed !== false;
+      const channelAllowlistConfigured =
+        Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+      const groupAllowed = isDiscordGroupAllowedByPolicy({
+        groupPolicy: access.groupPolicy,
+        guildAllowlisted: Boolean(guildInfo),
+        channelAllowlistConfigured,
+        channelAllowed,
+      });
+      if (!groupAllowed || !channelAllowed) {
+        return false;
+      }
+      const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+        channelConfig,
+        guildInfo,
+        memberRoleIds,
+        sender: {
+          id: user.id,
+          name: user.username ?? undefined,
+          tag: formatDiscordUserTag(user),
+        },
+      });
+      if (hasAccessRestrictions && !memberAllowed) {
+        logVerbose(`discord: drop guild reaction from ${user.id} (not in users/roles allowlist)`);
+        return false;
+      }
+      return true;
+    };
     let reactionBase: { baseText: string; contextKey: string } | null = null;
     const resolveReactionBase = () => {
       if (reactionBase) {
         return reactionBase;
       }
-      const emojiLabel = formatDiscordReactionEmoji(data.emoji);
-      const actorLabel = formatDiscordUserTag(user);
+      const emojiLabel = sanitizeReactionLabel(formatDiscordReactionEmoji(data.emoji));
+      const actorLabel = sanitizeReactionLabel(formatDiscordUserTag(user));
       const guildSlug =
         guildInfo?.slug ||
         (data.guild?.name
@@ -278,7 +431,9 @@ async function handleDiscordReactionEvent(params: {
       });
     const emitReactionWithAuthor = (message: { author?: User } | null) => {
       const { baseText } = resolveReactionBase();
-      const authorLabel = message?.author ? formatDiscordUserTag(message.author) : undefined;
+      const authorLabel = message?.author
+        ? sanitizeReactionLabel(formatDiscordUserTag(message.author))
+        : undefined;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
       emitReaction(text, parentId);
     };
@@ -322,7 +477,7 @@ async function handleDiscordReactionEvent(params: {
         await loadThreadParentInfo();
 
         const channelConfig = resolveThreadChannelConfig();
-        if (channelConfig?.allowed === false) {
+        if (!isGuildReactionAllowed(channelConfig)) {
           return;
         }
 
@@ -346,7 +501,7 @@ async function handleDiscordReactionEvent(params: {
       await loadThreadParentInfo();
 
       const channelConfig = resolveThreadChannelConfig();
-      if (channelConfig?.allowed === false) {
+      if (!isGuildReactionAllowed(channelConfig)) {
         return;
       }
 
@@ -370,7 +525,7 @@ async function handleDiscordReactionEvent(params: {
       parentSlug,
       scope: "channel",
     });
-    if (channelConfig?.allowed === false) {
+    if (!isGuildReactionAllowed(channelConfig)) {
       return;
     }
 

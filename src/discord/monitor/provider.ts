@@ -555,27 +555,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
 
   registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
+  const reactionListenerParams = {
+    cfg,
+    accountId: account.accountId,
+    runtime,
+    botUserId,
+    guildEntries,
+    logger,
+    dmEnabled,
+    dmPolicy,
+    allowFrom,
+    groupDmEnabled,
+    groupDmChannels,
+    groupPolicy,
+  };
+  registerDiscordListener(client.listeners, new DiscordReactionListener(reactionListenerParams));
   registerDiscordListener(
     client.listeners,
-    new DiscordReactionListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
-  );
-  registerDiscordListener(
-    client.listeners,
-    new DiscordReactionRemoveListener({
-      cfg,
-      accountId: account.accountId,
-      runtime,
-      botUserId,
-      guildEntries,
-      logger,
-    }),
+    new DiscordReactionRemoveListener(reactionListenerParams),
   );
 
   if (discordCfg.intents?.presence) {
