@@ -1,4 +1,4 @@
-import type { Message, ReactionTypeEmoji } from "@grammyjs/types";
+import type { Message, ReactionTypeEmoji, User } from "@grammyjs/types";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -57,6 +57,35 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+
+const REACTION_SENDER_LABEL_MAX_CHARS = 100;
+
+// Sender names are user-controlled and end up in agent system lines; keep them single-line and short.
+const sanitizeReactionLabelPart = (value: string | undefined): string =>
+  (value ?? "")
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const buildReactionSenderLabel = (user: User | undefined, senderId: string): string => {
+  const name = sanitizeReactionLabelPart(
+    [user?.first_name, user?.last_name].filter(Boolean).join(" "),
+  );
+  const username = sanitizeReactionLabelPart(user?.username);
+  let label = name || (username ? `@${username}` : "");
+  if (name && username) {
+    label = `${name} (@${username})`;
+  }
+  if (!label) {
+    label = senderId ? `id:${senderId}` : "unknown";
+  }
+  if (label.length > REACTION_SENDER_LABEL_MAX_CHARS) {
+    label = `${Array.from(label)
+      .slice(0, REACTION_SENDER_LABEL_MAX_CHARS - 1)
+      .join("")}…`;
+  }
+  return label;
+};
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -475,30 +504,83 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Build sender label.
-      const senderName = user
-        ? [user.first_name, user.last_name].filter(Boolean).join(" ").trim() || user.username
-        : undefined;
-      const senderUsername = user?.username ? `@${user.username}` : undefined;
-      let senderLabel = senderName;
-      if (senderName && senderUsername) {
-        senderLabel = `${senderName} (${senderUsername})`;
-      } else if (!senderName && senderUsername) {
-        senderLabel = senderUsername;
-      }
-      if (!senderLabel && user?.id) {
-        senderLabel = `id:${user.id}`;
-      }
-      senderLabel = senderLabel || "unknown";
+      // Channels are handled like channel_post (configured group, sender chat as sender).
+      // In groups only a real user counts as the sender, so an anonymous admin acting as
+      // the group cannot match a chat-id entry in the group allowlist.
+      const isChannel = reaction.chat.type === "channel";
+      const isGroup =
+        reaction.chat.type === "group" || reaction.chat.type === "supergroup" || isChannel;
+      const isForum = reaction.chat.is_forum === true;
+      const senderIdRaw = user?.id ?? (isChannel ? reaction.actor_chat?.id : undefined);
+      const senderId = senderIdRaw != null ? String(senderIdRaw) : "";
+      const actorChatUsername =
+        isChannel && reaction.actor_chat && "username" in reaction.actor_chat
+          ? reaction.actor_chat.username
+          : undefined;
+      const senderUsernameForAuth = (user ? user.username : actorChatUsername) ?? "";
 
       // Reactions target a specific message_id; the Telegram Bot API does not include
       // message_thread_id on MessageReactionUpdated, so we route to the chat-level
-      // session (forum topic routing is not available for reactions).
-      const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
-      const isForum = reaction.chat.is_forum === true;
-      const resolvedThreadId = isForum
-        ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
-        : undefined;
+      // session (forum topic routing is not available for reactions). The same
+      // resolved thread/config is used for authorization and routing.
+      const groupAllowContext = await resolveTelegramGroupAllowFromContext({
+        chatId,
+        accountId,
+        isForum,
+        messageThreadId: undefined,
+        groupAllowFrom,
+        resolveTelegramGroupConfig,
+      });
+      const {
+        resolvedThreadId: forumThreadId,
+        storeAllowFrom,
+        groupConfig,
+        topicConfig,
+        effectiveGroupAllow,
+        hasGroupAllowOverride,
+      } = groupAllowContext;
+      const resolvedThreadId = isGroup ? forumThreadId : undefined;
+
+      if (isChannel && (!groupConfig || groupConfig.enabled === false)) {
+        logVerbose(`Blocked telegram channel reaction ${chatId} (channel not configured)`);
+        return;
+      }
+      if (
+        shouldSkipGroupMessage({
+          isGroup,
+          chatId,
+          chatTitle: reaction.chat.title,
+          resolvedThreadId,
+          senderId,
+          senderUsername: senderUsernameForAuth,
+          effectiveGroupAllow,
+          hasGroupAllowOverride,
+          groupConfig,
+          topicConfig,
+        })
+      ) {
+        return;
+      }
+      if (!isGroup) {
+        const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+        if (dmPolicy === "disabled" || !senderId) {
+          return;
+        }
+        if (dmPolicy !== "open") {
+          const effectiveDmAllow = normalizeAllowFromWithStore({
+            allowFrom: opts.allowFrom ?? telegramCfg.allowFrom,
+            storeAllowFrom,
+          });
+          if (!isAllowlistAuthorized(effectiveDmAllow, senderId, senderUsernameForAuth)) {
+            logVerbose(
+              `Blocked telegram reaction from unauthorized sender ${senderId} (dmPolicy=${dmPolicy})`,
+            );
+            return;
+          }
+        }
+      }
+
+      const senderLabel = buildReactionSenderLabel(user, senderId);
       const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
       const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
       // Fresh config for bindings lookup; other routing inputs are payload-derived.
@@ -517,7 +599,7 @@ export const registerTelegramHandlers = ({
         const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
         enqueueSystemEvent(text, {
           sessionKey,
-          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+          contextKey: `telegram:reaction:add:${chatId}:${messageId}:${senderId || "anon"}:${emoji}`,
         });
         logVerbose(`telegram: reaction event enqueued: ${text}`);
       }
