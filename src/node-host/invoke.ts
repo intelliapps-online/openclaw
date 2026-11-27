@@ -31,6 +31,10 @@ import {
   type ExecHostResponse,
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
+import {
+  filterHostEnvOverrides,
+  hostEnvOverridesRequireApproval,
+} from "../infra/host-env-security.js";
 import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 
@@ -41,17 +45,6 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 const execHostEnforced = process.env.OPENCLAW_NODE_EXEC_HOST?.trim().toLowerCase() === "app";
 const execHostFallbackAllowed =
   process.env.OPENCLAW_NODE_EXEC_FALLBACK?.trim().toLowerCase() !== "0";
-
-const blockedEnvKeys = new Set([
-  "NODE_OPTIONS",
-  "PYTHONHOME",
-  "PYTHONPATH",
-  "PERL5LIB",
-  "PERL5OPT",
-  "RUBYOPT",
-]);
-
-const blockedEnvPrefixes = ["DYLD_", "LD_"];
 
 type SystemRunParams = {
   command: string[];
@@ -141,27 +134,9 @@ export function sanitizeEnv(
   if (!overrides) {
     return undefined;
   }
-  const merged = { ...process.env } as Record<string, string>;
-  for (const [rawKey, value] of Object.entries(overrides)) {
-    const key = rawKey.trim();
-    if (!key) {
-      continue;
-    }
-    const upper = key.toUpperCase();
-    // PATH is part of the security boundary (command resolution + safe-bin checks). Never allow
-    // request-scoped PATH overrides from agents/gateways.
-    if (upper === "PATH") {
-      continue;
-    }
-    if (blockedEnvKeys.has(upper)) {
-      continue;
-    }
-    if (blockedEnvPrefixes.some((prefix) => upper.startsWith(prefix))) {
-      continue;
-    }
-    merged[key] = value;
-  }
-  return merged;
+  // PATH (command resolution + safe-bin checks) and loader/interpreter hooks are part of the
+  // security boundary; filterHostEnvOverrides drops them.
+  return { ...(process.env as Record<string, string>), ...filterHostEnvOverrides(overrides) };
 }
 
 function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
@@ -591,6 +566,12 @@ export async function handleInvoke(
     analysisOk = false;
     allowlistSatisfied = false;
   }
+  // The allowlist only vouches for the command text; request env beyond display/locale keys
+  // needs an explicit approval (which the gateway binds to this exact env).
+  const envRequiresApproval = hostEnvOverridesRequireApproval(params.env ?? null);
+  if (envRequiresApproval) {
+    allowlistSatisfied = false;
+  }
 
   const useMacAppExec = process.platform === "darwin";
   if (useMacAppExec) {
@@ -598,11 +579,29 @@ export async function handleInvoke(
       params.approvalDecision === "allow-once" || params.approvalDecision === "allow-always"
         ? params.approvalDecision
         : null;
+    if (envRequiresApproval && !approvalDecision) {
+      await sendNodeEvent(
+        client,
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason: "approval-required",
+        }),
+      );
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
+      });
+      return;
+    }
     const execRequest: ExecHostRequest = {
       command: argv,
       rawCommand: rawCommand || shellCommand || null,
       cwd: params.cwd ?? null,
-      env: params.env ?? null,
+      env: filterHostEnvOverrides(params.env) ?? null,
       timeoutMs: params.timeoutMs ?? null,
       needsScreenRecording: params.needsScreenRecording ?? null,
       agentId: agentId ?? null,

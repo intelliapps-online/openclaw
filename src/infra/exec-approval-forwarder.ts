@@ -8,10 +8,11 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
+import {
+  formatExecApprovalEnv,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+  type ExecApprovalResolved,
 } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
@@ -124,6 +125,16 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   } else {
     lines.push("Command:");
     lines.push(command.text);
+  }
+  const envText = formatExecApprovalEnv(request.request.env);
+  if (envText) {
+    const env = formatApprovalCommand(envText);
+    if (env.inline) {
+      lines.push(`Env: ${env.text}`);
+    } else {
+      lines.push("Env:");
+      lines.push(env.text);
+    }
   }
   if (request.request.cwd) {
     lines.push(`CWD: ${request.request.cwd}`);

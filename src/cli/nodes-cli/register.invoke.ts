@@ -259,6 +259,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
                 agentId,
                 resolvedPath: undefined,
                 sessionKey: undefined,
+                env: nodeEnv,
                 timeoutMs: approvalTimeoutMs,
               },
               { transportTimeoutMs },

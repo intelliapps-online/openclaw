@@ -42,6 +42,7 @@ export function createExecApprovalHandlers(
         agentId?: string;
         resolvedPath?: string;
         sessionKey?: string;
+        env?: Record<string, string> | null;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -66,6 +67,7 @@ export function createExecApprovalHandlers(
         agentId: p.agentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: p.sessionKey ?? null,
+        env: p.env && Object.keys(p.env).length > 0 ? { ...p.env } : null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
       record.requestedByConnId = client?.connId ?? null;

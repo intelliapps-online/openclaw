@@ -1,3 +1,4 @@
+import { canonicalizeHostEnvOverrides } from "../infra/host-env-security.js";
 import {
   formatExecCommand,
   validateSystemRunCommandConsistency,
@@ -83,6 +84,13 @@ function approvalMatchesRequest(params: SystemRunParamsLike, record: ExecApprova
   const reqSessionKey = record.request.sessionKey ?? null;
   const runSessionKey = normalizeString(params.sessionKey) ?? null;
   if (reqSessionKey !== runSessionKey) {
+    return false;
+  }
+
+  // The approval covers the env the approver saw; any other env is a different request.
+  if (
+    canonicalizeHostEnvOverrides(record.request.env) !== canonicalizeHostEnvOverrides(params.env)
+  ) {
     return false;
   }
 

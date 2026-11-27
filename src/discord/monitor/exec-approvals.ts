@@ -215,6 +215,11 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
   if (request.request.agentId) {
     lines.push(`- Agent: ${request.request.agentId}`);
   }
+  for (const [key, value] of Object.entries(request.request.env ?? {})) {
+    // JSON-quote so newlines/markdown in values cannot forge extra metadata lines.
+    const quoted = JSON.stringify(value);
+    lines.push(`- Env: ${key}=${quoted.length > 300 ? `${quoted.slice(0, 300)}...` : quoted}`);
+  }
   return lines;
 }
 
