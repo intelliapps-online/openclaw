@@ -671,6 +671,90 @@ enum ExecApprovalHelpers {
     }
 }
 
+/// Policy for request-scoped env overrides on host exec (mirrors src/infra/host-env-security.ts).
+/// Blocked keys change how a shell, loader, VCS or interpreter loads code and are always dropped.
+/// Only display/locale keys may ride along with an allowlisted command; anything else needs approval.
+enum HostEnvSecurityPolicy {
+    private static let blockedKeys: Set<String> = [
+        "PATH", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "ZDOTDIR", "ENV", "BASH_ENV", "SHELL",
+        "SHELLOPTS", "BASHOPTS", "PS0", "PS1", "PS2", "PS3", "PS4", "PROMPT_COMMAND", "IFS", "CDPATH",
+        "GLOBIGNORE", "INPUTRC", "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "NODE_PATH", "PYTHONPATH",
+        "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE", "PERL5LIB", "PERLLIB", "PERL5DB", "RUBYLIB",
+        "GEM_HOME", "GEM_PATH", "BUNDLE_GEMFILE", "LUA_INIT", "LUA_PATH", "LUA_CPATH", "TCLLIBPATH",
+        "PHPRC", "PHP_INI_SCAN_DIR", "CLASSPATH", "GCONV_PATH", "GLIBC_TUNABLES", "LOCPATH", "NLSPATH",
+        "HOSTALIASES", "SSLKEYLOGFILE", "OPENSSL_CONF", "OPENSSL_ENGINES", "CURL_HOME", "WGETRC", "PAGER",
+        "MANPAGER", "LESSOPEN", "LESSCLOSE", "EDITOR", "VISUAL", "BROWSER", "SSH_ASKPASS", "SUDO_ASKPASS",
+        "ELECTRON_RUN_AS_NODE",
+    ]
+
+    private static let blockedPrefixes: [String] = [
+        "DYLD_", "LD_", "BASH_FUNC_", "GIT_", "NPM_CONFIG_", "COMPLUS_", "CORECLR_", "DOTNET_", "_JAVA_",
+    ]
+
+    private static let blockedSuffixes: [String] = ["OPT", "OPTS", "OPTIONS", "FLAGS", "HOOKS"]
+
+    private static let safeKeys: Set<String> = [
+        "LANG", "LANGUAGE", "TZ", "TERM", "COLORTERM", "NO_COLOR", "FORCE_COLOR", "CLICOLOR",
+        "CLICOLOR_FORCE", "COLUMNS", "LINES",
+    ]
+
+    private static let nameStartScalars = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
+    private static let nameScalars = nameStartScalars.union(CharacterSet(charactersIn: "0123456789"))
+    private static let safeValueScalars = nameScalars.union(CharacterSet(charactersIn: ".,:@+-"))
+    private static let safeTzStartScalars = nameScalars.union(CharacterSet(charactersIn: "+<-"))
+    private static let safeTzScalars = safeValueScalars.union(CharacterSet(charactersIn: "<>/"))
+
+    private static func isPortableName(_ key: String) -> Bool {
+        guard let first = key.unicodeScalars.first, self.nameStartScalars.contains(first) else { return false }
+        return key.unicodeScalars.allSatisfy { self.nameScalars.contains($0) }
+    }
+
+    static func isBlocked(key rawKey: String, value: String) -> Bool {
+        let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Rejects bash exported functions (`BASH_FUNC_name%%`) and other non-portable names.
+        guard self.isPortableName(key) else { return true }
+        let upper = key.uppercased()
+        if self.blockedKeys.contains(upper) { return true }
+        if self.blockedPrefixes.contains(where: { upper.hasPrefix($0) }) { return true }
+        if self.blockedSuffixes.contains(where: { upper.hasSuffix($0) }) { return true }
+        if value.contains("\u{0}") { return true }
+        // Legacy bash imports any value starting with "() {" as a function.
+        return value.drop(while: { $0.isWhitespace }).hasPrefix("()")
+    }
+
+    static func isSafe(key rawKey: String, value: String) -> Bool {
+        let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if self.isBlocked(key: key, value: value) { return false }
+        if value.contains("..") || value.unicodeScalars.count > 128 { return false }
+        let upper = key.uppercased()
+        if upper == "TZ" {
+            guard let first = value.unicodeScalars.first else { return true }
+            guard self.safeTzStartScalars.contains(first) else { return false }
+            return value.unicodeScalars.allSatisfy { self.safeTzScalars.contains($0) }
+        }
+        guard self.safeKeys.contains(upper) || upper.hasPrefix("LC_") else { return false }
+        return value.unicodeScalars.allSatisfy { self.safeValueScalars.contains($0) }
+    }
+
+    /// True when the overrides contain anything beyond the safe display/locale keys.
+    static func requiresApproval(_ overrides: [String: String]?) -> Bool {
+        guard let overrides else { return false }
+        return overrides.contains { !self.isSafe(key: $0.key, value: $0.value) }
+    }
+
+    static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
+        guard let overrides else { return nil }
+        var merged = ProcessInfo.processInfo.environment
+        for (rawKey, value) in overrides {
+            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty, !self.isBlocked(key: key, value: value) else { continue }
+            merged[key] = value
+        }
+        return merged
+    }
+}
+
 enum ExecAllowlistMatcher {
     static func match(entries: [ExecAllowlistEntry], resolution: ExecCommandResolution?) -> ExecAllowlistEntry? {
         guard let resolution, !entries.isEmpty else { return nil }

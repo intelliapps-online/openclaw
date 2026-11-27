@@ -14,6 +14,7 @@ struct ExecApprovalPromptRequest: Codable, Sendable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
+    var env: [String: String]?
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -308,6 +309,10 @@ enum ExecApprovalsPromptPresenter {
         if let ask = request.ask?.trimmingCharacters(in: .whitespacesAndNewlines), !ask.isEmpty {
             self.addDetailRow(title: "Ask mode", value: ask, to: contextStack)
         }
+        for key in (request.env ?? [:]).keys.sorted() {
+            let value = request.env?[key] ?? ""
+            self.addDetailRow(title: "Env", value: "\(key)=\(value)", to: contextStack)
+        }
 
         if contextStack.arrangedSubviews.isEmpty {
             let empty = NSTextField(labelWithString: "No additional context provided.")
@@ -364,21 +369,6 @@ private enum ExecHostExecutor {
         let skillAllow: Bool
     }
 
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
-
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
         let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard !command.isEmpty else {
@@ -421,7 +411,8 @@ private enum ExecHostExecutor {
                     ask: context.ask.rawValue,
                     agentId: context.trimmedAgent,
                     resolvedPath: context.resolution?.resolvedPath,
-                    sessionKey: request.sessionKey))
+                    sessionKey: request.sessionKey,
+                    env: request.env))
 
             switch decision {
             case .deny:
@@ -485,11 +476,13 @@ private enum ExecHostExecutor {
             rawCommand: request.rawCommand,
             cwd: request.cwd,
             env: env)
-        let allowlistMatch = security == .allowlist
+        // The allowlist only vouches for the command; non-display env needs an explicit approval.
+        let envRequiresApproval = HostEnvSecurityPolicy.requiresApproval(request.env)
+        let allowlistMatch = security == .allowlist && !envRequiresApproval
             ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
             : nil
         let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
+        if autoAllowSkills, !envRequiresApproval, let name = resolution?.executableName {
             let bins = await SkillBinsCache.shared.currentBins()
             skillAllow = bins.contains(name)
         } else {
@@ -581,17 +574,7 @@ private enum ExecHostExecutor {
     }
 
     private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
+        HostEnvSecurityPolicy.sanitizedEnv(overrides)
     }
 }
 
