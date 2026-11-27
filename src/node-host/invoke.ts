@@ -8,6 +8,7 @@ import { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
   analyzeArgvCommand,
+  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   requiresExecApproval,
@@ -24,6 +25,7 @@ import {
   type ExecAllowlistEntry,
   type ExecCommandSegment,
   type ExecSecurity,
+  type ExecSegmentSatisfiedBy,
 } from "../infra/exec-approvals.js";
 import {
   requestExecHostViaSocket,
@@ -31,7 +33,10 @@ import {
   type ExecHostResponse,
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
-import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
+import {
+  replaceShellCommandInArgv,
+  validateSystemRunCommandConsistency,
+} from "../infra/system-run-command.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 
 const OUTPUT_CAP = 200_000;
@@ -551,6 +556,7 @@ export async function handleInvoke(
   let allowlistMatches: ExecAllowlistEntry[] = [];
   let allowlistSatisfied = false;
   let segments: ExecCommandSegment[] = [];
+  let segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
   if (shellCommand) {
     const allowlistEval = evaluateShellAllowlist({
       command: shellCommand,
@@ -567,6 +573,7 @@ export async function handleInvoke(
     allowlistSatisfied =
       security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
     segments = allowlistEval.segments;
+    segmentSatisfiedBy = allowlistEval.segmentSatisfiedBy;
   } else {
     const analysis = analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
     const allowlistEval = evaluateExecAllowlist({
@@ -740,6 +747,50 @@ export async function handleInvoke(
     return;
   }
 
+  let execArgv = argv;
+  // Safe bins are only validated on their parsed argv tokens; the shell would otherwise
+  // re-expand variables/quotes after the check. Run the validated tokens as literals.
+  if (
+    security === "allowlist" &&
+    !isWindows &&
+    !approvedByAsk &&
+    shellCommand &&
+    analysisOk &&
+    allowlistSatisfied &&
+    segmentSatisfiedBy.some((by) => by === "safeBins")
+  ) {
+    const safe = buildSafeBinsShellCommand({
+      command: shellCommand,
+      segments,
+      segmentSatisfiedBy,
+      platform: process.platform,
+    });
+    const hardenedArgv =
+      safe.ok && safe.command ? replaceShellCommandInArgv(argv, safe.command) : null;
+    if (!hardenedArgv) {
+      await sendNodeEvent(
+        client,
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason: "safe-bins-sanitize-failed",
+        }),
+      );
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: `SYSTEM_RUN_DENIED: safeBins sanitize failed (${safe.reason ?? "unknown"})`,
+        },
+      });
+      return;
+    }
+    execArgv = hardenedArgv;
+  }
+
   if (allowlistMatches.length > 0) {
     const seen = new Set<string>();
     for (const match of allowlistMatches) {
@@ -776,7 +827,6 @@ export async function handleInvoke(
     return;
   }
 
-  let execArgv = argv;
   if (
     security === "allowlist" &&
     isWindows &&
