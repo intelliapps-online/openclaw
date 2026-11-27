@@ -138,6 +138,17 @@ double quotes; use single quotes if you need literal `$()` text.
 
 Default safe bins: `jq`, `grep`, `cut`, `sort`, `uniq`, `head`, `tail`, `tr`, `wc`.
 
+## Environment overrides
+
+Allowlist entries, safe bins, and skill auto-allow only cover the command itself. Request-scoped
+environment variables can change what an allowlisted binary does (for example `GIT_CONFIG_*` or
+`PAGER`), so in allowlist mode any `env` override on a host run (gateway or node) is treated as an
+allowlist miss: it needs an explicit approval, or it is denied when no prompt is possible.
+The approval is bound to the exact overrides that were approved; a run with different overrides
+needs a new approval. Loader, interpreter, and shell control variables (for example `PATH`,
+`LD_*`, `DYLD_*`, `NODE_OPTIONS`, `BASH_ENV`, `BASH_FUNC_*`, `SHELLOPTS`, `PS4`) are never
+accepted as overrides on hosts.
+
 ## Control UI editing
 
 Use the **Control UI → Nodes → Exec approvals** card to edit defaults, per‑agent
@@ -168,6 +179,7 @@ The confirmation dialog includes:
 - cwd
 - agent id
 - resolved executable path
+- names of any environment overrides
 - host + policy metadata
 
 Actions:
