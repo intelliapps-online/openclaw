@@ -18,7 +18,7 @@ describe("checkTwitchAccessControl", () => {
   };
 
   describe("when no restrictions are configured", () => {
-    it("allows messages that mention the bot (default requireMention)", () => {
+    it("blocks messages that mention the bot", () => {
       const message: TwitchChatMessage = {
         ...mockMessage,
         message: "@testbot hello",
@@ -28,7 +28,21 @@ describe("checkTwitchAccessControl", () => {
         account: mockAccount,
         botUsername: "testbot",
       });
-      expect(result.allowed).toBe(true);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("no allowFrom or allowedRoles");
+    });
+
+    it("blocks messages when allowFrom and allowedRoles are empty", () => {
+      const message: TwitchChatMessage = {
+        ...mockMessage,
+        message: "@testbot hello",
+      };
+      const result = checkTwitchAccessControl({
+        message,
+        account: { ...mockAccount, allowFrom: [], allowedRoles: [], requireMention: false },
+        botUsername: "testbot",
+      });
+      expect(result.allowed).toBe(false);
     });
   });
 
@@ -56,7 +70,7 @@ describe("checkTwitchAccessControl", () => {
 
       const result = checkTwitchAccessControl({
         message,
-        account: mockAccount,
+        account: { ...mockAccount, allowedRoles: ["all"] },
         botUsername: "testbot",
       });
       expect(result.allowed).toBe(true);
@@ -68,6 +82,7 @@ describe("checkTwitchAccessControl", () => {
       const account: TwitchAccountConfig = {
         ...mockAccount,
         requireMention: true,
+        allowedRoles: ["all"],
       };
       const message: TwitchChatMessage = {
         ...mockMessage,
@@ -101,6 +116,7 @@ describe("checkTwitchAccessControl", () => {
       const account: TwitchAccountConfig = {
         ...mockAccount,
         requireMention: true,
+        allowedRoles: ["all"],
       };
       const message: TwitchChatMessage = {
         ...mockMessage,

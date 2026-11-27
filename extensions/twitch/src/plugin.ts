@@ -7,6 +7,7 @@
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk";
+import { hasTwitchAccessRules, isTwitchOpenToAllViewers } from "./access-control.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
@@ -112,6 +113,29 @@ export const twitchPlugin: ChannelPlugin<TwitchAccountConfig> = {
         enabled: account?.enabled !== false,
         configured: account ? isAccountConfigured(account, account?.accessToken) : false,
       };
+    },
+  },
+
+  /** Security audit warnings */
+  security: {
+    collectWarnings: ({ cfg }) => {
+      const warnings: string[] = [];
+      for (const accountId of listAccountIds(cfg)) {
+        const account = getAccountConfig(cfg, accountId);
+        if (!account || account.enabled === false) {
+          continue;
+        }
+        if (isTwitchOpenToAllViewers(account)) {
+          warnings.push(
+            `- Twitch account "${accountId}": allowedRoles includes "all", so any public Twitch viewer can trigger the agent. Use allowFrom (user IDs) or specific allowedRoles instead.`,
+          );
+        } else if (!hasTwitchAccessRules(account)) {
+          warnings.push(
+            `- Twitch account "${accountId}": no allowFrom or allowedRoles configured; chat is locked and all messages are ignored.`,
+          );
+        }
+      }
+      return warnings;
     },
   },
 

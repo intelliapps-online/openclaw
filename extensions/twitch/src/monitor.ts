@@ -7,7 +7,11 @@
 
 import type { ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
 import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
-import { checkTwitchAccessControl } from "./access-control.js";
+import {
+  checkTwitchAccessControl,
+  hasTwitchAccessRules,
+  isTwitchOpenToAllViewers,
+} from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
@@ -210,6 +214,17 @@ export async function monitorTwitchProvider(
     error: (msg: string) => coreLogger.error(msg),
     debug: logVerboseMessage,
   };
+
+  if (!hasTwitchAccessRules(account)) {
+    logger.warn(
+      `[twitch:${accountId}] No allowFrom or allowedRoles configured; ignoring all chat messages. ` +
+        `Add Twitch user IDs to allowFrom or set allowedRoles (allowedRoles: ["all"] lets any viewer reach the agent).`,
+    );
+  } else if (isTwitchOpenToAllViewers(account)) {
+    logger.warn(
+      `[twitch:${accountId}] allowedRoles includes "all"; any Twitch viewer in #${account.channel} can trigger the agent.`,
+    );
+  }
 
   const clientManager = getOrCreateClientManager(accountId, logger);
 
