@@ -32,6 +32,7 @@ import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { checkGatewayHealth } from "./doctor-gateway-health.js";
 import {
   maybeRepairGatewayServiceConfig,
+  maybeRestrictGatewayServiceFilePermissions,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
@@ -194,6 +195,7 @@ export async function doctorCommand(
 
   await maybeScanExtraGatewayServices(options, runtime, prompter);
   await maybeRepairGatewayServiceConfig(cfg, resolveMode(cfg), runtime, prompter);
+  await maybeRestrictGatewayServiceFilePermissions();
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 

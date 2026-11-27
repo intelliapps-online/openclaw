@@ -12,9 +12,11 @@ import {
   needsNodeRuntimeMigration,
   SERVICE_AUDIT_CODES,
 } from "../daemon/service-audit.js";
+import { restrictServiceFilePermissions } from "../daemon/service-file.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
+import { shortenHomePath } from "../utils.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -218,6 +220,45 @@ export async function maybeRepairGatewayServiceConfig(
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);
+  }
+}
+
+/**
+ * Older installs wrote the service file (which embeds the gateway token) with the default umask,
+ * leaving it readable by other local users. Restricting it is always safe, so this runs without a
+ * prompt, including the non-interactive doctor pass of `openclaw update`.
+ */
+export async function maybeRestrictGatewayServiceFilePermissions() {
+  if (resolveIsNixMode(process.env)) {
+    return;
+  }
+  let sourcePath: string | undefined;
+  try {
+    sourcePath = (await resolveGatewayService().readCommand(process.env))?.sourcePath;
+  } catch {
+    return;
+  }
+  if (!sourcePath) {
+    return;
+  }
+  const displayPath = shortenHomePath(sourcePath);
+  try {
+    const fixed = await restrictServiceFilePermissions(sourcePath);
+    if (!fixed) {
+      return;
+    }
+    note(
+      [
+        `- Restricted ${displayPath} to owner-only access (was ${fixed.previousMode.toString(8)}); it embeds the gateway token.`,
+        "- Other local users may already have read it: rotate gateway.auth.token, then rerun gateway install with --force.",
+      ].join("\n"),
+      "Gateway service",
+    );
+  } catch (err) {
+    note(
+      `- ${displayPath} is readable by other users and could not be restricted: ${String(err)}`,
+      "Gateway service",
+    );
   }
 }
 

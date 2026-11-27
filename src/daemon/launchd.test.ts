@@ -59,6 +59,27 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       state.files.set(key, data);
       state.dirs.add(String(key.split("/").slice(0, -1).join("/")));
     }),
+    open: vi.fn(async (p: string) => {
+      const key = String(p);
+      let content = "";
+      return {
+        chmod: vi.fn(async () => {}),
+        writeFile: vi.fn(async (data: string) => {
+          content = String(data);
+        }),
+        close: vi.fn(async () => {
+          state.files.set(key, content);
+        }),
+      };
+    }),
+    rename: vi.fn(async (from: string, to: string) => {
+      const data = state.files.get(String(from)) ?? "";
+      state.files.delete(String(from));
+      state.files.set(String(to), data);
+    }),
+    rm: vi.fn(async (p: string) => {
+      state.files.delete(String(p));
+    }),
   };
   return { ...wrapped, default: wrapped };
 });
