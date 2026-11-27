@@ -1,10 +1,13 @@
+import * as crypto from "crypto";
 import * as http from "http";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import {
   type ClawdbotConfig,
   type RuntimeEnv,
   type HistoryEntry,
-  installRequestBodyLimitGuard,
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount, listEnabledFeishuAccounts } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent, type FeishuBotAddedEvent } from "./bot.js";
@@ -25,6 +28,42 @@ const httpServers = new Map<string, http.Server>();
 const botOpenIds = new Map<string, string>();
 const FEISHU_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const FEISHU_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+const FEISHU_WEBHOOK_DEFAULT_HOST = "127.0.0.1";
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/**
+ * Feishu signs webhook deliveries as sha256(timestamp + nonce + encryptKey + rawBody).
+ * The Lark SDK skips this check whenever its dispatcher has no encrypt key, so it is
+ * enforced here, on the raw bytes, before anything reaches the dispatcher.
+ */
+function isFeishuWebhookSignatureValid(params: {
+  headers: http.IncomingHttpHeaders;
+  rawBody: string;
+  encryptKey: string;
+}): boolean {
+  const { headers, rawBody, encryptKey } = params;
+  if (!encryptKey) {
+    return false;
+  }
+  const timestamp = firstHeader(headers["x-lark-request-timestamp"]);
+  const nonce = firstHeader(headers["x-lark-request-nonce"]);
+  const signature = firstHeader(headers["x-lark-signature"]);
+  if (!timestamp || !nonce || !signature) {
+    return false;
+  }
+  const expected = Buffer.from(
+    crypto
+      .createHash("sha256")
+      .update(timestamp + nonce + encryptKey + rawBody)
+      .digest("hex"),
+    "utf8",
+  );
+  const received = Buffer.from(signature, "utf8");
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
 
 async function fetchBotOpenId(account: ResolvedFeishuAccount): Promise<string | undefined> {
   try {
@@ -114,12 +153,20 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
   const { accountId } = account;
   const log = runtime?.log ?? console.log;
 
+  const connectionMode = account.config.connectionMode ?? "websocket";
+  // Without an encrypt key, webhook deliveries cannot be authenticated.
+  const webhookEncryptKey = account.encryptKey;
+  if (connectionMode === "webhook" && !webhookEncryptKey) {
+    throw new Error(
+      `feishu[${accountId}]: webhook mode requires encryptKey (Feishu event subscription Encrypt Key); refusing to start unauthenticated webhook`,
+    );
+  }
+
   // Fetch bot open_id
   const botOpenId = await fetchBotOpenId(account);
   botOpenIds.set(accountId, botOpenId ?? "");
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
-  const connectionMode = account.config.connectionMode ?? "websocket";
   const eventDispatcher = createEventDispatcher(account);
   const chatHistories = new Map<string, HistoryEntry[]>();
 
@@ -131,8 +178,8 @@ async function monitorSingleAccount(params: MonitorAccountParams): Promise<void>
     fireAndForget: connectionMode === "webhook",
   });
 
-  if (connectionMode === "webhook") {
-    return monitorWebhook({ params, accountId, eventDispatcher });
+  if (connectionMode === "webhook" && webhookEncryptKey) {
+    return monitorWebhook({ params, accountId, eventDispatcher, encryptKey: webhookEncryptKey });
   }
 
   return monitorWebSocket({ params, accountId, eventDispatcher });
@@ -189,40 +236,122 @@ async function monitorWebSocket({
   });
 }
 
+function respondText(res: http.ServerResponse, status: number, text: string): void {
+  if (res.headersSent) {
+    return;
+  }
+  res.statusCode = status;
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  res.end(text);
+}
+
+function createWebhookRequestHandler(params: {
+  path: string;
+  encryptKey: string;
+  eventDispatcher: Lark.EventDispatcher;
+  accountId: string;
+  runtime?: RuntimeEnv;
+}): (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void> {
+  const { path, encryptKey, eventDispatcher, accountId, runtime } = params;
+  const log = runtime?.log ?? console.log;
+
+  return async (req, res) => {
+    if (req.url !== path) {
+      respondText(res, 404, "Not Found");
+      return;
+    }
+    if (req.method !== "POST") {
+      res.setHeader("Allow", "POST");
+      respondText(res, 405, "Method Not Allowed");
+      return;
+    }
+
+    let rawBody: string;
+    try {
+      rawBody = await readRequestBodyWithLimit(req, {
+        maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
+        timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
+      });
+    } catch (err) {
+      if (isRequestBodyLimitError(err)) {
+        respondText(res, err.statusCode, requestBodyErrorToText(err.code));
+        return;
+      }
+      throw err;
+    }
+
+    let payload: unknown;
+    try {
+      payload = JSON.parse(rawBody);
+    } catch {
+      respondText(res, 400, "Invalid JSON");
+      return;
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      respondText(res, 400, "Invalid payload");
+      return;
+    }
+
+    // Same shape Lark.adaptDefault builds: headers live on the prototype so they stay
+    // out of the SDK's own JSON.stringify-based signature check.
+    const data = Object.assign(Object.create({ headers: req.headers }) as object, payload);
+
+    // URL verification only echoes the challenge back and never reaches event handlers.
+    let isChallenge: boolean;
+    let challenge: unknown;
+    try {
+      ({ isChallenge, challenge } = Lark.generateChallenge(data, { encryptKey }));
+    } catch {
+      respondText(res, 400, "Invalid payload");
+      return;
+    }
+    if (isChallenge) {
+      res.setHeader("Content-Type", "application/json; charset=utf-8");
+      res.end(JSON.stringify(challenge));
+      return;
+    }
+
+    if (!isFeishuWebhookSignatureValid({ headers: req.headers, rawBody, encryptKey })) {
+      log(`feishu[${accountId}]: rejected webhook request with invalid signature`);
+      respondText(res, 401, "Invalid signature");
+      return;
+    }
+
+    const value = await eventDispatcher.invoke(data);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.end(JSON.stringify(value));
+  };
+}
+
 async function monitorWebhook({
   params,
   accountId,
   eventDispatcher,
-}: ConnectionParams): Promise<void> {
+  encryptKey,
+}: ConnectionParams & { encryptKey: string }): Promise<void> {
   const { account, runtime, abortSignal } = params;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
+  const host = account.config.webhookHost?.trim() || FEISHU_WEBHOOK_DEFAULT_HOST;
   const port = account.config.webhookPort ?? 3000;
   const path = account.config.webhookPath ?? "/feishu/events";
 
-  log(`feishu[${accountId}]: starting Webhook server on port ${port}, path ${path}...`);
+  log(`feishu[${accountId}]: starting Webhook server on ${host}:${port}, path ${path}...`);
 
   const server = http.createServer();
-  const webhookHandler = Lark.adaptDefault(path, eventDispatcher, { autoChallenge: true });
+  const webhookHandler = createWebhookRequestHandler({
+    path,
+    encryptKey,
+    eventDispatcher,
+    accountId,
+    runtime,
+  });
   server.on("request", (req, res) => {
-    const guard = installRequestBodyLimitGuard(req, res, {
-      maxBytes: FEISHU_WEBHOOK_MAX_BODY_BYTES,
-      timeoutMs: FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
-      responseFormat: "text",
+    void webhookHandler(req, res).catch((err) => {
+      error(`feishu[${accountId}]: webhook handler error: ${String(err)}`);
+      respondText(res, 500, "Internal Server Error");
     });
-    if (guard.isTripped()) {
-      return;
-    }
-    void Promise.resolve(webhookHandler(req, res))
-      .catch((err) => {
-        if (!guard.isTripped()) {
-          error(`feishu[${accountId}]: webhook handler error: ${String(err)}`);
-        }
-      })
-      .finally(() => {
-        guard.dispose();
-      });
   });
   httpServers.set(accountId, server);
 
@@ -247,8 +376,8 @@ async function monitorWebhook({
 
     abortSignal?.addEventListener("abort", handleAbort, { once: true });
 
-    server.listen(port, () => {
-      log(`feishu[${accountId}]: Webhook server listening on port ${port}`);
+    server.listen(port, host, () => {
+      log(`feishu[${accountId}]: Webhook server listening on ${host}:${port}`);
     });
 
     server.on("error", (err) => {
