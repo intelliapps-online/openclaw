@@ -369,10 +369,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const kind = channelKind(channelType);
     const chatType = channelChatType(kind);
 
-    const senderName =
-      payload.data?.sender_name?.trim() ||
-      (await resolveUserInfo(senderId))?.username?.trim() ||
-      senderId;
+    // payload.data.sender_name is a display string (webhook posts can override it), so
+    // identity, allowlists, and SenderName must come from the username for post.user_id.
+    const senderName = (await resolveUserInfo(senderId))?.username?.trim() || senderId;
     const rawText = post.message?.trim() || "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
     const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
@@ -955,12 +954,14 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         entry.post.channel_id ??
         entry.payload.data?.channel_id ??
         entry.payload.broadcast?.channel_id;
-      if (!channelId) {
+      // handlePost authorizes the merged batch as its last sender, so batches must not mix senders.
+      const senderId = entry.post.user_id ?? entry.payload.broadcast?.user_id;
+      if (!channelId || !senderId) {
         return null;
       }
       const threadId = entry.post.root_id?.trim();
       const threadKey = threadId ? `thread:${threadId}` : "channel";
-      return `mattermost:${account.accountId}:${channelId}:${threadKey}`;
+      return `mattermost:${account.accountId}:${channelId}:${threadKey}:${senderId}`;
     },
     shouldDebounce: (entry) => {
       if (entry.post.file_ids && entry.post.file_ids.length > 0) {
