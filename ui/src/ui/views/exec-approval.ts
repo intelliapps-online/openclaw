@@ -52,6 +52,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           ${renderMetaRow("Session", request.sessionKey)}
           ${renderMetaRow("CWD", request.cwd)}
           ${renderMetaRow("Resolved", request.resolvedPath)}
+          ${renderMetaRow("Env", request.envKeys?.length ? request.envKeys.join(", ") : null)}
           ${renderMetaRow("Security", request.security)}
           ${renderMetaRow("Ask", request.ask)}
         </div>

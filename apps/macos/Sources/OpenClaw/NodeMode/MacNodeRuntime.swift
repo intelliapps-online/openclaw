@@ -453,17 +453,21 @@ actor MacNodeRuntime {
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
         let runId = UUID().uuidString
-        let env = Self.sanitizedEnv(params.env)
+        let env = HostEnvSanitizer.merged(params.env)
+        let envOverrideKeys = HostEnvSanitizer.overrideKeys(params.env)
         let resolution = ExecCommandResolution.resolve(
             command: command,
             rawCommand: params.rawCommand,
             cwd: params.cwd,
             env: env)
-        let allowlistMatch = security == .allowlist
+        // Allowlist entries and skill bins vouch for argv only; caller env can make an allowlisted
+        // binary run other code, so env overrides always need an explicit approval (which the
+        // gateway binds to this exact env).
+        let allowlistMatch = security == .allowlist && envOverrideKeys.isEmpty
             ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
             : nil
         let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
+        if autoAllowSkills, envOverrideKeys.isEmpty, let name = resolution?.executableName {
             let bins = await SkillBinsCache.shared.currentBins()
             skillAllow = bins.contains(name)
         } else {
@@ -496,6 +500,7 @@ actor MacNodeRuntime {
                 resolution: resolution,
                 allowlistMatch: allowlistMatch,
                 skillAllow: skillAllow,
+                envOverrideKeys: envOverrideKeys,
                 sessionKey: sessionKey,
                 runId: runId))
         if let response = approval.response { return response }
@@ -638,6 +643,7 @@ actor MacNodeRuntime {
         var resolution: ExecCommandResolution?
         var allowlistMatch: ExecAllowlistEntry?
         var skillAllow: Bool
+        var envOverrideKeys: [String]
         var sessionKey: String
         var runId: String
     }
@@ -685,7 +691,8 @@ actor MacNodeRuntime {
                         ask: context.ask.rawValue,
                         agentId: context.agentId,
                         resolvedPath: context.resolution?.resolvedPath,
-                        sessionKey: context.sessionKey))
+                        sessionKey: context.sessionKey,
+                        envKeys: context.envOverrideKeys.isEmpty ? nil : context.envOverrideKeys))
             }
             switch decision {
             case .deny:
@@ -860,35 +867,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
-
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

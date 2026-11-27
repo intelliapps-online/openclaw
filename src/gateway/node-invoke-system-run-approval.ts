@@ -1,4 +1,8 @@
 import {
+  computeHostEnvOverridesBinding,
+  sanitizeHostEnvOverrides,
+} from "../infra/host-env-security.js";
+import {
   formatExecCommand,
   validateSystemRunCommandConsistency,
 } from "../infra/system-run-command.js";
@@ -86,6 +90,12 @@ function approvalMatchesRequest(params: SystemRunParamsLike, record: ExecApprova
     return false;
   }
 
+  // Env overrides change what an approved command does, so the approval only covers the exact
+  // overrides recorded when it was requested (none, for records created without env).
+  if ((record.envBinding ?? null) !== computeHostEnvOverridesBinding(params.env)) {
+    return false;
+  }
+
   return true;
 }
 
@@ -97,7 +107,6 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     "command",
     "rawCommand",
     "cwd",
-    "env",
     "timeoutMs",
     "needsScreenRecording",
     "agentId",
@@ -107,6 +116,11 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
     if (key in raw) {
       next[key] = raw[key];
     }
+  }
+  // Forward exactly the env overrides the approval binding is computed over.
+  const env = sanitizeHostEnvOverrides(raw.env);
+  if (env) {
+    next.env = env;
   }
   return next;
 }

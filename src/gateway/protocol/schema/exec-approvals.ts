@@ -98,6 +98,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
     agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    env: Type.Optional(Type.Record(Type.String(), Type.String())),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
     twoPhase: Type.Optional(Type.Boolean()),
   },

@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/Exec approvals: treat request-scoped `env` overrides as an allowlist miss on gateway and node hosts (node host, macOS app, exec tool), bind `system.run` approvals to the exact approved overrides, show override names in approval prompts, and block shell-control variables such as `BASH_FUNC_*`, `SHELLOPTS`, and `PS4`, so caller env can no longer make an allowlisted or approved command run other code.
 - Gateway/Hooks: run BOOT.md startup checks per configured agent scope, including per-agent session-key resolution, startup-hook regression coverage, and non-success boot outcome logging for diagnosability. (#20569) thanks @mcaxtr.
 - Telegram: unify message-like inbound handling so `message` and `channel_post` share the same dedupe/access/media pipeline and remain behaviorally consistent. (#20591) Thanks @obviyus.
 - Heartbeat/Cron: skip interval heartbeats when `HEARTBEAT.md` is missing or empty and no tagged cron events are queued, while preserving cron-event fallback for queued tagged reminders. (#20461) thanks @vikpos.

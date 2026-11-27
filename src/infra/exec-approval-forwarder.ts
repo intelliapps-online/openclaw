@@ -134,6 +134,9 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   if (request.request.agentId) {
     lines.push(`Agent: ${request.request.agentId}`);
   }
+  if (request.request.envKeys?.length) {
+    lines.push(`Env overrides: ${request.request.envKeys.join(", ")}`);
+  }
   if (request.request.security) {
     lines.push(`Security: ${request.request.security}`);
   }

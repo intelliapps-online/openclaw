@@ -14,6 +14,7 @@ struct ExecApprovalPromptRequest: Codable, Sendable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
+    var envKeys: [String]?
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -302,6 +303,9 @@ enum ExecApprovalsPromptPresenter {
         if !trimmedHost.isEmpty {
             self.addDetailRow(title: "Host", value: trimmedHost, to: contextStack)
         }
+        if let envKeys = request.envKeys, !envKeys.isEmpty {
+            self.addDetailRow(title: "Env overrides", value: envKeys.joined(separator: ", "), to: contextStack)
+        }
         if let security = request.security?.trimmingCharacters(in: .whitespacesAndNewlines), !security.isEmpty {
             self.addDetailRow(title: "Security", value: security, to: contextStack)
         }
@@ -359,25 +363,11 @@ private enum ExecHostExecutor {
         let ask: ExecAsk
         let autoAllowSkills: Bool
         let env: [String: String]?
+        let envOverrideKeys: [String]
         let resolution: ExecCommandResolution?
         let allowlistMatch: ExecAllowlistEntry?
         let skillAllow: Bool
     }
-
-    private static let blockedEnvKeys: Set<String> = [
-        "PATH",
-        "NODE_OPTIONS",
-        "PYTHONHOME",
-        "PYTHONPATH",
-        "PERL5LIB",
-        "PERL5OPT",
-        "RUBYOPT",
-    ]
-
-    private static let blockedEnvPrefixes: [String] = [
-        "DYLD_",
-        "LD_",
-    ]
 
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
         let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -421,7 +411,8 @@ private enum ExecHostExecutor {
                     ask: context.ask.rawValue,
                     agentId: context.trimmedAgent,
                     resolvedPath: context.resolution?.resolvedPath,
-                    sessionKey: request.sessionKey))
+                    sessionKey: request.sessionKey,
+                    envKeys: context.envOverrideKeys.isEmpty ? nil : context.envOverrideKeys))
 
             switch decision {
             case .deny:
@@ -479,17 +470,20 @@ private enum ExecHostExecutor {
         let security = approvals.agent.security
         let ask = approvals.agent.ask
         let autoAllowSkills = approvals.agent.autoAllowSkills
-        let env = self.sanitizedEnv(request.env)
+        let env = HostEnvSanitizer.merged(request.env)
+        let envOverrideKeys = HostEnvSanitizer.overrideKeys(request.env)
         let resolution = ExecCommandResolution.resolve(
             command: command,
             rawCommand: request.rawCommand,
             cwd: request.cwd,
             env: env)
-        let allowlistMatch = security == .allowlist
+        // Allowlist entries and skill bins vouch for argv only; caller env can make an allowlisted
+        // binary run other code, so env overrides always need an explicit approval.
+        let allowlistMatch = security == .allowlist && envOverrideKeys.isEmpty
             ? ExecAllowlistMatcher.match(entries: approvals.allowlist, resolution: resolution)
             : nil
         let skillAllow: Bool
-        if autoAllowSkills, let name = resolution?.executableName {
+        if autoAllowSkills, envOverrideKeys.isEmpty, let name = resolution?.executableName {
             let bins = await SkillBinsCache.shared.currentBins()
             skillAllow = bins.contains(name)
         } else {
@@ -504,6 +498,7 @@ private enum ExecHostExecutor {
             ask: ask,
             autoAllowSkills: autoAllowSkills,
             env: env,
+            envOverrideKeys: envOverrideKeys,
             resolution: resolution,
             allowlistMatch: allowlistMatch,
             skillAllow: skillAllow)
@@ -578,20 +573,6 @@ private enum ExecHostExecutor {
             ok: true,
             payload: payload,
             error: nil)
-    }
-
-    private static func sanitizedEnv(_ overrides: [String: String]?) -> [String: String]? {
-        guard let overrides else { return nil }
-        var merged = ProcessInfo.processInfo.environment
-        for (rawKey, value) in overrides {
-            let key = rawKey.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else { continue }
-            let upper = key.uppercased()
-            if self.blockedEnvKeys.contains(upper) { continue }
-            if self.blockedEnvPrefixes.contains(where: { upper.hasPrefix($0) }) { continue }
-            merged[key] = value
-        }
-        return merged
     }
 }
 
