@@ -22,10 +22,19 @@ export type ExecApprovalRequest = {
     agentId?: string | null;
     resolvedPath?: string | null;
     sessionKey?: string | null;
+    env?: Record<string, string> | null;
   };
   createdAtMs: number;
   expiresAtMs: number;
 };
+
+export function formatExecApprovalEnv(env?: Record<string, string> | null): string | null {
+  const entries = env ? Object.entries(env) : [];
+  if (entries.length === 0) {
+    return null;
+  }
+  return entries.map(([key, value]) => `${key}=${value}`).join("\n");
+}
 
 export type ExecApprovalResolved = {
   id: string;

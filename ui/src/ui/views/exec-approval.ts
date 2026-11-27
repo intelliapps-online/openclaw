@@ -46,6 +46,14 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           }
         </div>
         <div class="exec-approval-command mono">${request.command}</div>
+        ${
+          request.env && Object.keys(request.env).length > 0
+            ? html`<div class="exec-approval-sub">Environment</div>
+                <div class="exec-approval-command mono">${Object.entries(request.env)
+                  .map(([key, value]) => `${key}=${value}`)
+                  .join("\n")}</div>`
+            : nothing
+        }
         <div class="exec-approval-meta">
           ${renderMetaRow("Host", request.host)}
           ${renderMetaRow("Agent", request.agentId)}

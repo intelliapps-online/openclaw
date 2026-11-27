@@ -7,7 +7,16 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  env?: Record<string, string> | null;
 };
+
+function parseEnv(value: unknown): Record<string, string> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const entries = Object.entries(value).map(([key, entry]) => [key, String(entry)] as const);
+  return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
 
 export type ExecApprovalRequest = {
   id: string;
@@ -56,6 +65,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      env: parseEnv(request.env),
     },
     createdAtMs,
     expiresAtMs,
