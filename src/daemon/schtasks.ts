@@ -6,6 +6,7 @@ import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { writeServiceFile } from "./service-file.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 function resolveTaskName(env: Record<string, string | undefined>): string {
@@ -189,7 +190,6 @@ export async function installScheduledTask({
 }): Promise<{ scriptPath: string }> {
   await assertSchtasksAvailable();
   const scriptPath = resolveTaskScriptPath(env);
-  await fs.mkdir(path.dirname(scriptPath), { recursive: true });
   const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
   const script = buildTaskScript({
     description: taskDescription,
@@ -197,7 +197,7 @@ export async function installScheduledTask({
     workingDirectory,
     environment,
   });
-  await fs.writeFile(scriptPath, script, "utf8");
+  await writeServiceFile(scriptPath, script);
 
   const taskName = resolveTaskName(env);
   const quotedScript = quoteCmdArg(scriptPath);

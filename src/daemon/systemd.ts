@@ -9,6 +9,7 @@ import { execFileUtf8 } from "./exec-file.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveHomeDir } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
+import { writeServiceFile } from "./service-file.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import {
   enableSystemdUserLinger,
@@ -199,7 +200,6 @@ export async function installSystemdService({
   await assertSystemdAvailable();
 
   const unitPath = resolveSystemdUnitPath(env);
-  await fs.mkdir(path.dirname(unitPath), { recursive: true });
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const unit = buildSystemdUnit({
     description: serviceDescription,
@@ -207,7 +207,7 @@ export async function installSystemdService({
     workingDirectory,
     environment,
   });
-  await fs.writeFile(unitPath, unit, "utf8");
+  await writeServiceFile(unitPath, unit);
 
   const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
   const unitName = `${serviceName}.service`;
