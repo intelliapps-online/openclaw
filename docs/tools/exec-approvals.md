@@ -125,8 +125,19 @@ are treated as allowlisted on nodes (macOS node or headless node host). This use
 that can run in allowlist mode **without** explicit allowlist entries. Safe bins reject
 positional file args and path-like tokens, so they can only operate on the incoming stream.
 Safe bins also force argv tokens to be treated as **literal text** at execution time (no globbing
-and no `$VARS` expansion) for stdin-only segments, so patterns like `*` or `$HOME/...` cannot be
-used to smuggle file reads.
+and no `$VARS` expansion) for stdin-only segments, on both the gateway and node hosts, so patterns
+like `*` or `$HOME/...` cannot be used to smuggle file reads.
+
+Options are checked per binary. The default safe bins accept only a fixed set of flags that
+operate on the stream; long options must be spelled out in full (no abbreviations). Options that
+read or write files, spawn programs, or recurse into directories are not auto-allowed, for example
+`sort -o`/`-T`/`--compress-program`/`--files0-from`, `grep -f`/`-r`/`-R`/`-d`/`--include`,
+`jq -L`/`-f`/`--rawfile`/`--slurpfile`, and `tail -f`. `jq` filters that read the environment or
+load modules (`env`, `$ENV`, `import`, `include`, `modulemeta`) also need approval, as do
+request-scoped overrides of variables that change safe-bin behavior (`TMPDIR` for `sort`, `HOME`
+for `jq`, `GREP_OPTIONS` for `grep`). Custom safe bins without a built-in profile accept operands
+only (no options). Anything outside these rules falls back to the normal allowlist and approval
+flow.
 Safe bins must also resolve from trusted binary directories (system defaults plus the gateway
 process `PATH` at startup). This blocks request-scoped PATH hijacking attempts.
 Shell chaining and redirections are not auto-allowed in allowlist mode.

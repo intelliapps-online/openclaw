@@ -8,6 +8,7 @@ import { GatewayClient } from "../gateway/client.js";
 import {
   addAllowlistEntry,
   analyzeArgvCommand,
+  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   requiresExecApproval,
@@ -24,6 +25,7 @@ import {
   type ExecAllowlistEntry,
   type ExecCommandSegment,
   type ExecSecurity,
+  type ExecSegmentSatisfiedBy,
 } from "../infra/exec-approvals.js";
 import {
   requestExecHostViaSocket,
@@ -31,7 +33,10 @@ import {
   type ExecHostResponse,
   type ExecHostRunResult,
 } from "../infra/exec-host.js";
-import { validateSystemRunCommandConsistency } from "../infra/system-run-command.js";
+import {
+  resolveShellCommandArgIndex,
+  validateSystemRunCommandConsistency,
+} from "../infra/system-run-command.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
 
 const OUTPUT_CAP = 200_000;
@@ -551,6 +556,7 @@ export async function handleInvoke(
   let allowlistMatches: ExecAllowlistEntry[] = [];
   let allowlistSatisfied = false;
   let segments: ExecCommandSegment[] = [];
+  let segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
   if (shellCommand) {
     const allowlistEval = evaluateShellAllowlist({
       command: shellCommand,
@@ -567,6 +573,7 @@ export async function handleInvoke(
     allowlistSatisfied =
       security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
     segments = allowlistEval.segments;
+    segmentSatisfiedBy = allowlistEval.segmentSatisfiedBy;
   } else {
     const analysis = analyzeArgvCommand({ argv, cwd: params.cwd ?? undefined, env });
     const allowlistEval = evaluateExecAllowlist({
@@ -574,6 +581,7 @@ export async function handleInvoke(
       allowlist: approvals.allowlist,
       safeBins,
       cwd: params.cwd ?? undefined,
+      env,
       skillBins: bins,
       autoAllowSkills,
     });
@@ -582,6 +590,7 @@ export async function handleInvoke(
     allowlistSatisfied =
       security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
     segments = analysis.segments;
+    segmentSatisfiedBy = allowlistEval.segmentSatisfiedBy;
   }
   const isWindows = process.platform === "win32";
   const cmdInvocation = shellCommand
@@ -789,6 +798,34 @@ export async function handleInvoke(
   ) {
     execArgv = segments[0].argv;
   }
+  if (
+    security === "allowlist" &&
+    !approvedByAsk &&
+    analysisOk &&
+    allowlistSatisfied &&
+    segmentSatisfiedBy.includes("safeBins")
+  ) {
+    const safeArgv = resolveSafeBinsExecArgv({ argv, shellCommand, segments, segmentSatisfiedBy });
+    if (!safeArgv) {
+      await sendNodeEvent(
+        client,
+        "exec.denied",
+        buildExecEventPayload({
+          sessionKey,
+          runId,
+          host: "node",
+          command: cmdText,
+          reason: "safe-bins-sanitize-failed",
+        }),
+      );
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: safeBins sanitize failed" },
+      });
+      return;
+    }
+    execArgv = safeArgv;
+  }
 
   const result = await runCommand(
     execArgv,
@@ -817,6 +854,41 @@ export async function handleInvoke(
       error: result.error ?? null,
     }),
   });
+}
+
+/**
+ * Safe-bin approval is decided on the parsed argv, so execution must use exactly that argv:
+ * shell payloads are rebuilt with safe-bin tokens single-quoted (no expansion or word splitting),
+ * and direct argv runs use the analyzed tokens.
+ */
+function resolveSafeBinsExecArgv(params: {
+  argv: string[];
+  shellCommand: string | null;
+  segments: ExecCommandSegment[];
+  segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+}): string[] | null {
+  if (!params.shellCommand) {
+    const segment = params.segments.length === 1 ? params.segments[0] : undefined;
+    return segment && segment.argv.length > 0 ? segment.argv : null;
+  }
+  const commandIndex = resolveShellCommandArgIndex(params.argv);
+  if (commandIndex === null) {
+    return null;
+  }
+  const safe = buildSafeBinsShellCommand({
+    command: params.shellCommand,
+    segments: params.segments,
+    segmentSatisfiedBy: params.segmentSatisfiedBy,
+    platform: process.platform,
+  });
+  if (!safe.ok || !safe.command) {
+    return null;
+  }
+  return [
+    ...params.argv.slice(0, commandIndex),
+    safe.command,
+    ...params.argv.slice(commandIndex + 1),
+  ];
 }
 
 function decodeParams<T>(raw?: string | null): T {

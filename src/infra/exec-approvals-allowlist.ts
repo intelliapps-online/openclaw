@@ -12,6 +12,7 @@ import {
   type ExecCommandSegment,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
+import { isSafeBinArgvAllowed } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
 function isPathLikeToken(value: string): boolean {
@@ -67,6 +68,7 @@ export function isSafeBinUsage(params: {
   resolution: CommandResolution | null;
   safeBins: Set<string>;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   fileExists?: (filePath: string) => boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
 }): boolean {
@@ -102,39 +104,20 @@ export function isSafeBinUsage(params: {
   }
   const cwd = params.cwd ?? process.cwd();
   const exists = params.fileExists ?? defaultFileExists;
-  const argv = params.argv.slice(1);
-  for (let i = 0; i < argv.length; i += 1) {
-    const token = argv[i];
+  const isSafeLiteral = (token: string): boolean => {
     if (!token) {
-      continue;
+      return true;
     }
-    if (token === "-") {
-      continue;
-    }
-    if (token.startsWith("-")) {
-      const eqIndex = token.indexOf("=");
-      if (eqIndex > 0) {
-        const value = token.slice(eqIndex + 1);
-        if (value && hasGlobToken(value)) {
-          return false;
-        }
-        if (value && (isPathLikeToken(value) || exists(path.resolve(cwd, value)))) {
-          return false;
-        }
-      }
-      continue;
-    }
-    if (hasGlobToken(token)) {
+    if (hasGlobToken(token) || isPathLikeToken(token)) {
       return false;
     }
-    if (isPathLikeToken(token)) {
-      return false;
-    }
-    if (exists(path.resolve(cwd, token))) {
-      return false;
-    }
-  }
-  return true;
+    return !exists(path.resolve(cwd, token));
+  };
+  return isSafeBinArgvAllowed(execName, {
+    argv: params.argv,
+    isSafeLiteral,
+    env: params.env,
+  });
 }
 
 export type ExecAllowlistEvaluation = {
@@ -151,6 +134,7 @@ function evaluateSegments(
     allowlist: ExecAllowlistEntry[];
     safeBins: Set<string>;
     cwd?: string;
+    env?: NodeJS.ProcessEnv;
     skillBins?: Set<string>;
     autoAllowSkills?: boolean;
   },
@@ -178,6 +162,7 @@ function evaluateSegments(
       resolution: segment.resolution,
       safeBins: params.safeBins,
       cwd: params.cwd,
+      env: params.env,
     });
     const skillAllow =
       allowSkills && segment.resolution?.executableName
@@ -202,6 +187,7 @@ export function evaluateExecAllowlist(params: {
   allowlist: ExecAllowlistEntry[];
   safeBins: Set<string>;
   cwd?: string;
+  env?: NodeJS.ProcessEnv;
   skillBins?: Set<string>;
   autoAllowSkills?: boolean;
 }): ExecAllowlistEvaluation {
@@ -218,6 +204,7 @@ export function evaluateExecAllowlist(params: {
         allowlist: params.allowlist,
         safeBins: params.safeBins,
         cwd: params.cwd,
+        env: params.env,
         skillBins: params.skillBins,
         autoAllowSkills: params.autoAllowSkills,
       });
@@ -235,6 +222,7 @@ export function evaluateExecAllowlist(params: {
     allowlist: params.allowlist,
     safeBins: params.safeBins,
     cwd: params.cwd,
+    env: params.env,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
   });
@@ -290,6 +278,7 @@ export function evaluateShellAllowlist(params: {
       allowlist: params.allowlist,
       safeBins: params.safeBins,
       cwd: params.cwd,
+      env: params.env,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
     });
@@ -323,6 +312,7 @@ export function evaluateShellAllowlist(params: {
       allowlist: params.allowlist,
       safeBins: params.safeBins,
       cwd: params.cwd,
+      env: params.env,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
     });
