@@ -1,6 +1,7 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { isSlackEventSenderAllowed } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackPinEvent } from "../types.js";
@@ -32,11 +33,22 @@ async function handleSlackPinEvent(params: {
     ) {
       return;
     }
+    const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
+    const senderAllowed = await isSlackEventSenderAllowed({
+      ctx,
+      channelId,
+      channelName: channelInfo?.name,
+      channelType: channelInfo?.type,
+      userId: payload.user,
+      userName: userInfo?.name,
+    });
+    if (!senderAllowed) {
+      return;
+    }
     const label = resolveSlackChannelLabel({
       channelId,
       channelName: channelInfo?.name,
     });
-    const userInfo = payload.user ? await ctx.resolveUserName(payload.user) : {};
     const userLabel = userInfo?.name ?? payload.user ?? "someone";
     const itemType = payload.item?.type ?? "item";
     const messageId = payload.item?.message?.ts ?? payload.event_ts;

@@ -390,6 +390,32 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const groupId = reaction.groupInfo?.groupId ?? undefined;
       const groupName = reaction.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
+      // Reactions land in the same sessions as messages, so apply the same DM/group
+      // sender gates; reacting to the bot's pairing reply must not bypass pairing.
+      const reactionStoreAllowFrom = await readChannelAllowFromStore("signal").catch(() => []);
+      if (!isGroup) {
+        if (deps.dmPolicy === "disabled") {
+          return;
+        }
+        if (
+          deps.dmPolicy !== "open" &&
+          !isSignalSenderAllowed(sender, [...deps.allowFrom, ...reactionStoreAllowFrom])
+        ) {
+          logVerbose(`Blocked signal reaction from ${senderDisplay} (dmPolicy=${deps.dmPolicy})`);
+          return;
+        }
+      } else {
+        if (deps.groupPolicy === "disabled") {
+          return;
+        }
+        if (deps.groupPolicy === "allowlist") {
+          const groupAllow = [...deps.groupAllowFrom, ...reactionStoreAllowFrom];
+          if (groupAllow.length === 0 || !isSignalSenderAllowed(sender, groupAllow)) {
+            logVerbose(`Blocked signal group reaction from ${senderDisplay}`);
+            return;
+          }
+        }
+      }
       const senderPeerId = resolveSignalPeerId(sender);
       const route = resolveAgentRoute({
         cfg: deps.cfg,
