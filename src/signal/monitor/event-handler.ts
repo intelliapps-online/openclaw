@@ -45,12 +45,74 @@ import {
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
+  type SignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import type {
+  SignalDataMessage,
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+  SignalReceivePayload,
+} from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+
+type SignalSenderBlockReason =
+  | "dm-disabled"
+  | "dm-not-allowed"
+  | "group-disabled"
+  | "group-allowlist-empty"
+  | "group-sender-not-allowed";
+
+type SignalSenderAccess = {
+  dmAllowed: boolean;
+  effectiveDmAllow: string[];
+  effectiveGroupAllow: string[];
+  blockReason: SignalSenderBlockReason | null;
+};
+
+// signal-cli puts group context on the dataMessage; older payloads put it on the reaction.
+function resolveSignalReactionGroup(
+  reaction: SignalReactionMessage,
+  dataMessage: SignalDataMessage | null | undefined,
+): { groupId?: string; groupName?: string } {
+  const info = dataMessage?.groupInfo?.groupId ? dataMessage.groupInfo : reaction.groupInfo;
+  return {
+    groupId: info?.groupId ?? undefined,
+    groupName: info?.groupName ?? undefined,
+  };
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
+
+  async function resolveSignalSenderAccess(params: {
+    sender: SignalSender;
+    isGroup: boolean;
+  }): Promise<SignalSenderAccess> {
+    const { sender, isGroup } = params;
+    const storeAllowFrom = await readChannelAllowFromStore("signal").catch(() => []);
+    const effectiveDmAllow = [...deps.allowFrom, ...storeAllowFrom];
+    const effectiveGroupAllow = [...deps.groupAllowFrom, ...storeAllowFrom];
+    const dmAllowed =
+      deps.dmPolicy === "open" ? true : isSignalSenderAllowed(sender, effectiveDmAllow);
+    let blockReason: SignalSenderBlockReason | null = null;
+    if (!isGroup) {
+      if (deps.dmPolicy === "disabled") {
+        blockReason = "dm-disabled";
+      } else if (!dmAllowed) {
+        blockReason = "dm-not-allowed";
+      }
+    } else if (deps.groupPolicy === "disabled") {
+      blockReason = "group-disabled";
+    } else if (deps.groupPolicy === "allowlist") {
+      if (effectiveGroupAllow.length === 0) {
+        blockReason = "group-allowlist-empty";
+      } else if (!isSignalSenderAllowed(sender, effectiveGroupAllow)) {
+        blockReason = "group-sender-not-allowed";
+      }
+    }
+    return { dmAllowed, effectiveDmAllow, effectiveGroupAllow, blockReason };
+  }
 
   type SignalInboundEntry = {
     senderName: string;
@@ -371,10 +433,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (reaction.isRemove) {
         return;
       } // Ignore reaction removals
-      const emojiLabel = reaction.emoji?.trim() || "emoji";
       const senderDisplay = formatSignalSenderDisplay(sender);
+      // Bind the group once so authorization and routing see the same conversation.
+      const { groupId, groupName } = resolveSignalReactionGroup(reaction, dataMessage);
+      const isGroup = Boolean(groupId);
+      const access = await resolveSignalSenderAccess({ sender, isGroup });
+      if (access.blockReason) {
+        logVerbose(`Blocked signal reaction from ${senderDisplay} (${access.blockReason})`);
+        return;
+      }
+      const emojiLabel = reaction.emoji?.trim() || "emoji";
       const senderName = envelope.sourceName ?? senderDisplay;
-      logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
+      logVerbose(`signal reaction: ${emojiLabel} from ${senderDisplay}`);
       const targets = deps.resolveSignalReactionTargets(reaction);
       const shouldNotify = deps.shouldEmitSignalReactionNotification({
         mode: deps.reactionMode,
@@ -387,9 +457,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
 
-      const groupId = reaction.groupInfo?.groupId ?? undefined;
-      const groupName = reaction.groupInfo?.groupName ?? undefined;
-      const isGroup = Boolean(groupId);
       const senderPeerId = resolveSignalPeerId(sender);
       const route = resolveAgentRoute({
         cfg: deps.cfg,
@@ -441,17 +508,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    const storeAllowFrom = await readChannelAllowFromStore("signal").catch(() => []);
-    const effectiveDmAllow = [...deps.allowFrom, ...storeAllowFrom];
-    const effectiveGroupAllow = [...deps.groupAllowFrom, ...storeAllowFrom];
-    const dmAllowed =
-      deps.dmPolicy === "open" ? true : isSignalSenderAllowed(sender, effectiveDmAllow);
+    const { dmAllowed, effectiveDmAllow, effectiveGroupAllow, blockReason } =
+      await resolveSignalSenderAccess({ sender, isGroup });
 
     if (!isGroup) {
-      if (deps.dmPolicy === "disabled") {
+      if (blockReason === "dm-disabled") {
         return;
       }
-      if (!dmAllowed) {
+      if (blockReason === "dm-not-allowed") {
         if (deps.dmPolicy === "pairing") {
           const senderId = senderAllowId;
           const { code, created } = await upsertChannelPairingRequest({
@@ -486,19 +550,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
     }
-    if (isGroup && deps.groupPolicy === "disabled") {
+    if (blockReason === "group-disabled") {
       logVerbose("Blocked signal group message (groupPolicy: disabled)");
       return;
     }
-    if (isGroup && deps.groupPolicy === "allowlist") {
-      if (effectiveGroupAllow.length === 0) {
-        logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return;
-      }
-      if (!isSignalSenderAllowed(sender, effectiveGroupAllow)) {
-        logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
-        return;
-      }
+    if (blockReason === "group-allowlist-empty") {
+      logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
+      return;
+    }
+    if (blockReason === "group-sender-not-allowed") {
+      logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+      return;
+    }
+    if (blockReason) {
+      return;
     }
 
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
