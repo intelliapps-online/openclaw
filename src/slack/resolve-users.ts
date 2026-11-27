@@ -49,9 +49,14 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
   if (mention) {
     return { id: mention[1]?.toUpperCase() };
   }
-  const prefixed = trimmed.replace(/^(slack:|user:)/i, "");
-  if (/^[A-Z][A-Z0-9]+$/i.test(prefixed)) {
-    return { id: prefixed.toUpperCase() };
+  const prefixed = trimmed.match(/^(?:slack:|user:)([A-Z0-9]+)$/i);
+  if (prefixed) {
+    return { id: prefixed[1]?.toUpperCase() };
+  }
+  // Bare entries count as ids only when shaped like one (Slack ids are uppercase), so
+  // single-word names such as "alice" still go through the directory lookup below.
+  if (/^[UWB][A-Z0-9]{8,}$/.test(trimmed)) {
+    return { id: trimmed };
   }
   if (trimmed.includes("@") && !trimmed.startsWith("@")) {
     return { email: trimmed.toLowerCase() };
@@ -175,8 +180,19 @@ export async function resolveSlackUserAllowlist(params: {
           .filter(Boolean) as string[];
         return candidates.includes(target);
       });
-      if (matches.length > 0) {
-        results.push(resolveSlackUserFromMatches(input, matches, parsed));
+      const active = matches.filter((user) => !user.deleted);
+      const candidates = active.length > 0 ? active : matches;
+      // Names are member-editable and not unique; refuse to guess between several members.
+      if (candidates.length > 1) {
+        results.push({
+          input,
+          resolved: false,
+          note: `ambiguous name (${candidates.length} members); use a user id`,
+        });
+        continue;
+      }
+      if (candidates.length === 1) {
+        results.push(resolveSlackUserFromMatches(input, candidates, parsed));
         continue;
       }
     }

@@ -380,7 +380,6 @@ export async function registerSlackMonitorSlashCommands(params: {
           const allowMatch = resolveSlackAllowListMatch({
             allowList: effectiveAllowFromLower,
             id: command.user_id,
-            name: senderName,
           });
           const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
           if (!allowMatch.allowed) {
@@ -465,7 +464,6 @@ export async function registerSlackMonitorSlashCommands(params: {
         ? resolveSlackUserAllowed({
             allowList: channelConfig?.users,
             userId: command.user_id,
-            userName: senderName,
           })
         : false;
       if (channelUsersAllowlistConfigured && !channelUserAllowed) {
@@ -479,7 +477,6 @@ export async function registerSlackMonitorSlashCommands(params: {
       const ownerAllowed = resolveSlackAllowListMatch({
         allowList: effectiveAllowFromLower,
         id: command.user_id,
-        name: senderName,
       }).allowed;
       // DMs: allow chatting in dmPolicy=open, but keep privileged command gating intact by setting
       // CommandAuthorized based on allowlists/access-groups (downstream decides which commands need it).
