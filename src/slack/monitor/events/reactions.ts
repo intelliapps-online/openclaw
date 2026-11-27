@@ -1,6 +1,7 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { danger } from "../../../globals.js";
+import { danger, logVerbose } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
+import { isSlackEventSenderAllowed } from "../auth.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackReactionEvent } from "../types.js";
@@ -27,11 +28,24 @@ export function registerSlackReactionEvents(params: { ctx: SlackMonitorContext }
         return;
       }
 
+      const actorInfo = event.user ? await ctx.resolveUserName(event.user) : undefined;
+      const senderAllowed = await isSlackEventSenderAllowed({
+        ctx,
+        channelId: item.channel,
+        channelName: channelInfo?.name,
+        channelType,
+        userId: event.user,
+        userName: actorInfo?.name,
+      });
+      if (!senderAllowed) {
+        logVerbose(`slack: drop reaction from ${event.user ?? "unknown"} (sender not allowed)`);
+        return;
+      }
+
       const channelLabel = resolveSlackChannelLabel({
         channelId: item.channel,
         channelName: channelInfo?.name,
       });
-      const actorInfo = event.user ? await ctx.resolveUserName(event.user) : undefined;
       const actorLabel = actorInfo?.name ?? event.user;
       const emojiLabel = event.reaction ?? "emoji";
       const authorInfo = event.item_user ? await ctx.resolveUserName(event.item_user) : undefined;
