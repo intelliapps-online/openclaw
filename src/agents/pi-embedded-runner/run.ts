@@ -52,6 +52,7 @@ import { resolveModel } from "./model.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import type { RunEmbeddedPiAgentParams } from "./run/params.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import { runWithSandboxReplyMediaGuard } from "./run/sandbox-reply-media.js";
 import {
   truncateOversizedToolResultsInSession,
   sessionLikelyHasOversizedToolResults,
@@ -172,6 +173,12 @@ function resolveActiveErrorContext(params: {
 }
 
 export async function runEmbeddedPiAgent(
+  params: RunEmbeddedPiAgentParams,
+): Promise<EmbeddedPiRunResult> {
+  return await runWithSandboxReplyMediaGuard(params, runEmbeddedPiAgentUnguarded);
+}
+
+async function runEmbeddedPiAgentUnguarded(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);

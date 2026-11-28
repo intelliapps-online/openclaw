@@ -55,7 +55,12 @@ export async function openFileWithinRoot(params: {
   }
 
   const supportsNoFollow = process.platform !== "win32" && "O_NOFOLLOW" in fsConstants;
-  const flags = fsConstants.O_RDONLY | (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0);
+  // O_NONBLOCK keeps a FIFO under the root from hanging the open; it is rejected as "not a file" below.
+  const supportsNonBlock = process.platform !== "win32" && "O_NONBLOCK" in fsConstants;
+  const flags =
+    fsConstants.O_RDONLY |
+    (supportsNoFollow ? fsConstants.O_NOFOLLOW : 0) |
+    (supportsNonBlock ? fsConstants.O_NONBLOCK : 0);
 
   let handle: FileHandle;
   try {

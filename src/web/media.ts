@@ -1,6 +1,8 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AUTH_PROFILE_FILENAME, LEGACY_AUTH_FILENAME } from "../agents/auth-profiles/constants.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
@@ -37,6 +39,17 @@ export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+const CREDENTIAL_FILENAMES = new Set([AUTH_PROFILE_FILENAME, LEGACY_AUTH_FILENAME]);
+
+const LOCAL_MEDIA_OPEN_FLAGS =
+  fsConstants.O_RDONLY |
+  // Do not block on FIFOs or acquire a controlling terminal; non-files are rejected after open.
+  (process.platform !== "win32" ? fsConstants.O_NONBLOCK | fsConstants.O_NOCTTY : 0);
+
+function isCredentialFileName(filePath: string): boolean {
+  return CREDENTIAL_FILENAMES.has(path.basename(filePath));
+}
+
 async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
@@ -44,13 +57,24 @@ async function assertLocalMediaAllowed(
   if (localRoots === "any") {
     return;
   }
-  const roots = localRoots ?? getDefaultLocalRoots();
   // Resolve symlinks so a symlink under /tmp pointing to /etc/passwd is caught.
   let resolved: string;
   try {
     resolved = await fs.realpath(mediaPath);
   } catch {
     resolved = path.resolve(mediaPath);
+  }
+  await assertResolvedLocalMediaAllowed(resolved, mediaPath, localRoots);
+}
+
+async function assertResolvedLocalMediaAllowed(
+  resolved: string,
+  mediaPath: string,
+  localRoots: readonly string[] | undefined,
+): Promise<void> {
+  const roots = localRoots ?? getDefaultLocalRoots();
+  if (isCredentialFileName(resolved) || isCredentialFileName(mediaPath)) {
+    throw new Error(`Local media path is a credential file and cannot be sent: ${mediaPath}`);
   }
 
   // Hardening: the default allowlist includes `os.tmpdir()`, and tests/CI may
@@ -87,6 +111,35 @@ async function assertLocalMediaAllowed(
     }
   }
   throw new Error(`Local media path is not under an allowed directory: ${mediaPath}`);
+}
+
+/**
+ * Read a local media file only if the file actually opened lies under the allowed
+ * roots. The root check runs against the opened handle's identity (realpath must
+ * name the same inode), and the bytes come from that handle, so swapping the path
+ * or a parent directory for a symlink after the check cannot redirect the read.
+ */
+async function readAllowedLocalMedia(
+  mediaPath: string,
+  localRoots: readonly string[] | undefined,
+): Promise<Buffer> {
+  await assertLocalMediaAllowed(mediaPath, localRoots);
+  const handle = await fs.open(mediaPath, LOCAL_MEDIA_OPEN_FLAGS);
+  try {
+    const opened = await handle.stat();
+    if (!opened.isFile()) {
+      throw new Error(`Local media path is not a regular file: ${mediaPath}`);
+    }
+    const realPath = await fs.realpath(mediaPath);
+    const current = await fs.stat(realPath);
+    if (current.dev !== opened.dev || current.ino !== opened.ino) {
+      throw new Error(`Local media path changed while it was being opened: ${mediaPath}`);
+    }
+    await assertResolvedLocalMediaAllowed(realPath, mediaPath, localRoots);
+    return await handle.readFile();
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
@@ -294,19 +347,23 @@ async function loadWebMediaInternal(
     mediaUrl = resolveUserPath(mediaUrl);
   }
 
-  if ((sandboxValidated || localRoots === "any") && !readFileOverride) {
+  const bypassLocalRoots = sandboxValidated || localRoots === "any";
+  if (bypassLocalRoots && !readFileOverride) {
     throw new Error(
       "Refusing localRoots bypass without readFile override. Use sandboxValidated with readFile, or pass explicit localRoots.",
     );
   }
 
   // Guard local reads against allowed directory roots to prevent file exfiltration.
-  if (!(sandboxValidated || localRoots === "any")) {
-    await assertLocalMediaAllowed(mediaUrl, localRoots);
+  let data: Buffer;
+  if (readFileOverride) {
+    if (!bypassLocalRoots) {
+      await assertLocalMediaAllowed(mediaUrl, localRoots);
+    }
+    data = await readFileOverride(mediaUrl);
+  } else {
+    data = await readAllowedLocalMedia(mediaUrl, localRoots === "any" ? undefined : localRoots);
   }
-
-  // Local path
-  const data = readFileOverride ? await readFileOverride(mediaUrl) : await fs.readFile(mediaUrl);
   const mime = await detectMime({ buffer: data, filePath: mediaUrl });
   const kind = mediaKindFromMime(mime);
   let fileName = path.basename(mediaUrl) || undefined;

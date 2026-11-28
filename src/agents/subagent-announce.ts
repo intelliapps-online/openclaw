@@ -28,6 +28,7 @@ import {
   queueEmbeddedPiMessage,
   waitForEmbeddedPiRunEnd,
 } from "./pi-embedded.js";
+import { stageSandboxedReplyText } from "./sandbox-reply-media.js";
 import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
@@ -910,8 +911,14 @@ export async function runSubagentAnnounceFlow(params: {
       startedAt: params.startedAt,
       endedAt: params.endedAt,
     });
+    // The completion message can be sent straight to the channel without another
+    // agent run in between, so a sandboxed child's media must be staged here.
     completionMessage = buildCompletionDeliveryMessage({
-      findings,
+      findings: await stageSandboxedReplyText({
+        text: findings,
+        config: loadConfig(),
+        sessionKey: params.childSessionKey,
+      }),
       subagentName,
     });
     const internalSummaryMessage = [

@@ -471,6 +471,8 @@ describe("runMessageAction sendAttachment hydration", () => {
       },
     } as OpenClawConfig;
     await withSandbox(async (sandboxDir) => {
+      await fs.mkdir(path.join(sandboxDir, "data"), { recursive: true });
+      await fs.writeFile(path.join(sandboxDir, "data", "pic.png"), "sandbox-pic");
       await runMessageAction({
         cfg,
         action: "sendAttachment",
@@ -484,7 +486,10 @@ describe("runMessageAction sendAttachment hydration", () => {
       });
 
       const call = vi.mocked(loadWebMedia).mock.calls[0];
-      expect(call?.[0]).toBe(path.join(sandboxDir, "data", "pic.png"));
+      const loadedPath = call?.[0] ?? "";
+      expect(path.basename(loadedPath)).toBe("pic.png");
+      expect(loadedPath.startsWith(sandboxDir + path.sep)).toBe(false);
+      expect(await fs.readFile(loadedPath, "utf8")).toBe("sandbox-pic");
     });
   });
 });
