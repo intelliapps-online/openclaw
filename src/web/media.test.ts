@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,12 @@ import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { captureEnv } from "../test-utils/env.js";
-import { loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } from "./media.js";
+import {
+  getDefaultLocalRoots,
+  loadWebMedia,
+  loadWebMediaRaw,
+  optimizeImageToJpeg,
+} from "./media.js";
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -354,7 +360,7 @@ describe("local media root guard", () => {
     ).rejects.toThrow(/refuses filesystem root/i);
   });
 
-  it("allows default OpenClaw state workspace and sandbox roots", async () => {
+  it("allows the default OpenClaw state workspace root", async () => {
     const { resolveStateDir } = await import("../config/paths.js");
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
@@ -369,17 +375,46 @@ describe("local media root guard", () => {
         kind: "unknown",
       }),
     );
+  });
 
-    await expect(
-      loadWebMedia(path.join(stateDir, "sandboxes", "session-1", "frame.bin"), {
-        maxBytes: 1024 * 1024,
-        readFile,
-      }),
-    ).resolves.toEqual(
-      expect.objectContaining({
-        kind: "unknown",
-      }),
-    );
+  it("does not list agent or sandbox state directories as default roots", async () => {
+    const { resolveStateDir } = await import("../config/paths.js");
+    const stateDir = path.resolve(resolveStateDir());
+    const roots = getDefaultLocalRoots();
+    expect(roots).not.toContain(path.join(stateDir, "agents"));
+    expect(roots).not.toContain(path.join(stateDir, "sandboxes"));
+  });
+
+  it("rejects credential store files even under an allowed root", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cred-"));
+    try {
+      const authFile = path.join(dir, "auth-profiles.json");
+      await fs.writeFile(authFile, "{}");
+      const alias = path.join(dir, "notes.txt");
+      await fs.symlink(authFile, alias);
+      await expect(loadWebMedia(authFile, { localRoots: [dir] })).rejects.toThrow(
+        /credential file/i,
+      );
+      await expect(loadWebMedia(alias, { localRoots: [dir] })).rejects.toThrow(/credential file/i);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-regular files without blocking", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-fifo-"));
+    try {
+      const fifo = path.join(dir, "pipe");
+      execFileSync("mkfifo", [fifo]);
+      await expect(loadWebMedia(fifo, { localRoots: [dir] })).rejects.toThrow(
+        /not a regular file/i,
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {

@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/Media: keep sandboxed sessions inside their sandbox when delivering reply media. `MEDIA:` paths, block replies, tool-result media, message-tool attachments, and relayed subagent/agent-to-agent text from a sandboxed session must now resolve inside that session's sandbox workspace and are sent as staged copies; other local paths are dropped. Default local media roots no longer include `~/.openclaw/agents` or `~/.openclaw/sandboxes`, credential store files (`auth-profiles.json`, `auth.json`) are never sent, and local media is read from the file handle that passed the root check.
 - Gateway/Hooks: run BOOT.md startup checks per configured agent scope, including per-agent session-key resolution, startup-hook regression coverage, and non-success boot outcome logging for diagnosability. (#20569) thanks @mcaxtr.
 - Telegram: unify message-like inbound handling so `message` and `channel_post` share the same dedupe/access/media pipeline and remain behaviorally consistent. (#20591) Thanks @obviyus.
 - Heartbeat/Cron: skip interval heartbeats when `HEARTBEAT.md` is missing or empty and no tagged cron events are queued, while preserving cron-event fallback for queued tagged reminders. (#20461) thanks @vikpos.

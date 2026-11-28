@@ -4,14 +4,15 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 
+// `agents/` (auth profiles, session transcripts) and `sandboxes/` (every sandbox
+// workspace) are deliberately not roots. Sandboxed sessions deliver their own
+// files as gateway-owned copies staged out of their sandbox (see sandbox-media.ts).
 function buildMediaLocalRoots(stateDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
   return [
     os.tmpdir(),
     path.join(resolvedStateDir, "media"),
-    path.join(resolvedStateDir, "agents"),
     path.join(resolvedStateDir, "workspace"),
-    path.join(resolvedStateDir, "sandboxes"),
   ];
 }
 

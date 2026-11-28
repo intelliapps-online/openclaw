@@ -17,19 +17,19 @@ import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js"
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
-async function ensureSandboxWorkspaceLayout(params: {
-  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
-  rawSessionKey: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}): Promise<{
+type SandboxWorkspaceLayout = {
   agentWorkspaceDir: string;
   scopeKey: string;
   sandboxWorkspaceDir: string;
   workspaceDir: string;
-}> {
-  const { cfg, rawSessionKey } = params;
+};
 
+function resolveSandboxWorkspaceLayout(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  rawSessionKey: string;
+  workspaceDir?: string;
+}): SandboxWorkspaceLayout {
+  const { cfg, rawSessionKey } = params;
   const agentWorkspaceDir = resolveUserPath(
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
   );
@@ -38,6 +38,18 @@ async function ensureSandboxWorkspaceLayout(params: {
   const sandboxWorkspaceDir =
     cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+  return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
+}
+
+async function ensureSandboxWorkspaceLayout(params: {
+  cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
+  rawSessionKey: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): Promise<SandboxWorkspaceLayout> {
+  const { cfg } = params;
+  const { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir } =
+    resolveSandboxWorkspaceLayout(params);
 
   if (workspaceDir === sandboxWorkspaceDir) {
     await ensureSandboxWorkspace(
@@ -154,6 +166,27 @@ export async function resolveSandboxContext(params: {
   sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
 
   return sandboxContext;
+}
+
+/**
+ * Host directory a sandboxed session sees as its workspace (the same root the
+ * sandbox file tools and the message tool use), or null when the session is not
+ * sandboxed. Pure path resolution: nothing is created.
+ */
+export function resolveSandboxWorkspaceDirForSession(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): string | null {
+  const resolved = resolveSandboxSession(params);
+  if (!resolved) {
+    return null;
+  }
+  return resolveSandboxWorkspaceLayout({
+    cfg: resolved.cfg,
+    rawSessionKey: resolved.rawSessionKey,
+    workspaceDir: params.workspaceDir,
+  }).workspaceDir;
 }
 
 export async function ensureSandboxWorkspaceForSession(params: {

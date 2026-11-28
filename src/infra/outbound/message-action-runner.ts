@@ -424,18 +424,17 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     seenMedia.add(trimmed);
     mergedMediaUrls.push(trimmed);
   };
+  // media/path/filePath were already normalized by normalizeSandboxMediaParams;
+  // only MEDIA directives from the message text still need it.
   pushMedia(mediaHint);
-  for (const url of parsed.mediaUrls ?? []) {
+  const directiveMediaUrls = await normalizeSandboxMediaList({
+    values: [...(parsed.mediaUrls ?? []), ...(parsed.mediaUrl ? [parsed.mediaUrl] : [])],
+    sandboxRoot: input.sandboxRoot,
+    dryRun,
+  });
+  for (const url of directiveMediaUrls) {
     pushMedia(url);
   }
-  pushMedia(parsed.mediaUrl);
-
-  const normalizedMediaUrls = await normalizeSandboxMediaList({
-    values: mergedMediaUrls,
-    sandboxRoot: input.sandboxRoot,
-  });
-  mergedMediaUrls.length = 0;
-  mergedMediaUrls.push(...normalizedMediaUrls);
 
   message = parsed.text;
   params.message = message;
@@ -759,6 +758,7 @@ export async function runMessageAction(
   await normalizeSandboxMediaParams({
     args: params,
     sandboxRoot: input.sandboxRoot,
+    dryRun,
   });
 
   await hydrateSendAttachmentParams({

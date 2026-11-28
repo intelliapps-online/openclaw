@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRemoteMediaUrl, stageSandboxedMediaFile } from "../../agents/sandbox-media.js";
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
 import { readStringParam } from "../../agents/tools/common.js";
 import type {
@@ -201,7 +202,8 @@ async function hydrateAttachmentPayload(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    // mediaSource already validated by normalizeSandboxMediaList; allow bypass but force explicit readFile.
+    // mediaSource already validated (and staged out of the sandbox) by normalizeSandboxMediaParams;
+    // allow bypass but force explicit readFile.
     const media = await loadWebMedia(mediaSource, {
       maxBytes,
       sandboxValidated: true,
@@ -225,9 +227,36 @@ async function hydrateAttachmentPayload(params: {
   }
 }
 
+/**
+ * Sandboxed sessions: local media must resolve inside the sandbox root. Outside a
+ * dry run the file is replaced by a staged, gateway-owned copy, because delivery
+ * reads local media only from the shared media roots (never `sandboxes/`).
+ */
+async function normalizeSandboxMediaValue(params: {
+  raw: string;
+  sandboxRoot: string;
+  dryRun?: boolean;
+}): Promise<{ resolved: string; normalized: string }> {
+  const resolved = await resolveSandboxedMediaSource({
+    media: params.raw,
+    sandboxRoot: params.sandboxRoot,
+  });
+  if (params.dryRun || isRemoteMediaUrl(resolved)) {
+    return { resolved, normalized: resolved };
+  }
+  return {
+    resolved,
+    normalized: await stageSandboxedMediaFile({
+      filePath: resolved,
+      sandboxRoot: params.sandboxRoot,
+    }),
+  };
+}
+
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
   sandboxRoot?: string;
+  dryRun?: boolean;
 }): Promise<void> {
   const sandboxRoot = params.sandboxRoot?.trim();
   const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
@@ -240,7 +269,11 @@ export async function normalizeSandboxMediaParams(params: {
     if (!sandboxRoot) {
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: raw, sandboxRoot });
+    const { normalized } = await normalizeSandboxMediaValue({
+      raw,
+      sandboxRoot,
+      dryRun: params.dryRun,
+    });
     if (normalized !== raw) {
       params.args[key] = normalized;
     }
@@ -250,6 +283,7 @@ export async function normalizeSandboxMediaParams(params: {
 export async function normalizeSandboxMediaList(params: {
   values: string[];
   sandboxRoot?: string;
+  dryRun?: boolean;
 }): Promise<string[]> {
   const sandboxRoot = params.sandboxRoot?.trim();
   const normalized: string[] = [];
@@ -260,14 +294,19 @@ export async function normalizeSandboxMediaList(params: {
       continue;
     }
     assertMediaNotDataUrl(raw);
-    const resolved = sandboxRoot
-      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
-      : raw;
-    if (seen.has(resolved)) {
+    if (!sandboxRoot) {
+      if (!seen.has(raw)) {
+        seen.add(raw);
+        normalized.push(raw);
+      }
       continue;
     }
-    seen.add(resolved);
-    normalized.push(resolved);
+    const result = await normalizeSandboxMediaValue({ raw, sandboxRoot, dryRun: params.dryRun });
+    if (seen.has(result.resolved)) {
+      continue;
+    }
+    seen.add(result.resolved);
+    normalized.push(result.normalized);
   }
   return normalized;
 }
